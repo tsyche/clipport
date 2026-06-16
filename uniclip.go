@@ -2,8 +2,6 @@ package main
 
 import (
 	"bufio"
-	"bytes"
-	"compress/flate"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -12,17 +10,17 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net"
 	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
-	"golang.org/x/crypto/ssh/terminal"
+	"golang.org/x/term"
 
 	"golang.org/x/crypto/scrypt"
 )
@@ -42,6 +40,7 @@ Examples:
 Running just ` + "`uniclip`" + ` will start a new clipboard.
 It will also provide an address with which you can connect to the same clipboard with another device.
 Refer to https://github.com/quackduck/uniclip for more information`
+	mu             sync.Mutex
 	listOfClients  = make([]*bufio.Writer, 0)
 	localClipboard string
 	printDebugInfo = false
@@ -86,9 +85,17 @@ func main() {
 		return
 	}
 
+	if port != "" {
+		n, err := strconv.Atoi(port)
+		if err != nil || n < 1 || n > 65535 {
+			fmt.Fprintln(os.Stderr, "error: invalid port number:", port)
+			os.Exit(1)
+		}
+	}
+
 	if secure {
 		fmt.Print("Password for --secure: ")
-		password, _ = terminal.ReadPassword(int(syscall.Stdin))
+		password, _ = term.ReadPassword(int(syscall.Stdin))
 		fmt.Println()
 	}
 
@@ -126,7 +133,9 @@ func makeServer(port string) {
 // Handle a client as a server
 func HandleClient(c net.Conn) {
 	w := bufio.NewWriter(c)
+	mu.Lock()
 	listOfClients = append(listOfClients, w)
+	mu.Unlock()
 	defer c.Close()
 	go MonitorSentClips(bufio.NewReader(c))
 	MonitorLocalClip(w)
@@ -153,7 +162,9 @@ func ConnectToServer(address string) {
 // monitors for changes to the local clipboard and writes them to w
 func MonitorLocalClip(w *bufio.Writer) {
 	for {
+		mu.Lock()
 		localClipboard = getLocalClip()
+		mu.Unlock()
 		debug("localClipboard changed. localClipboard =", localClipboard)
 		err := sendClipboard(w, localClipboard)
 		if err != nil {
@@ -195,9 +206,11 @@ func MonitorSentClips(r *bufio.Reader) {
 			continue
 		}
 		setLocalClip(foreignClipboard)
+		mu.Lock()
 		localClipboard = foreignClipboard
+		mu.Unlock()
 		debug("rcvd:", foreignClipboard)
-		fmt.Println("Received clipboard from the server:", foreignClipboard) // troubleshooting
+		mu.Lock()
 		for i := range listOfClients {
 			if listOfClients[i] != nil {
 				err = sendClipboard(listOfClients[i], foreignClipboard)
@@ -207,10 +220,11 @@ func MonitorSentClips(r *bufio.Reader) {
 				}
 			}
 		}
+		mu.Unlock()
 	}
 }
 
-// sendClipboard compresses and then if secure is enabled, encrypts data
+// sendClipboard encrypts data if secure mode is enabled, then sends it
 func sendClipboard(w *bufio.Writer, clipboard string) error {
 	var clipboardBytes []byte
 	var err error
@@ -254,6 +268,9 @@ func encrypt(key, data []byte) ([]byte, error) {
 }
 
 func decrypt(key, data []byte) ([]byte, error) {
+	if len(data) < 32 {
+		return nil, errors.New("ciphertext too short")
+	}
 	salt, data := data[len(data)-32:], data[:len(data)-32]
 	key, _, err := deriveKey(key, salt)
 	if err != nil {
@@ -289,27 +306,6 @@ func deriveKey(password, salt []byte) ([]byte, []byte, error) {
 	return key, salt, nil
 }
 
-func compress(str string) []byte {
-	var buf bytes.Buffer
-	zw, _ := flate.NewWriter(&buf, -1)
-	_, _ = zw.Write([]byte(str))
-	_ = zw.Close()
-	return buf.Bytes()
-}
-
-func decompress(b []byte) string {
-	var buf bytes.Buffer
-	_, _ = buf.Write(b)
-	zr := flate.NewReader(&buf)
-	decompressed, err := ioutil.ReadAll(zr)
-	if err != nil {
-		handleError(err)
-		return "Issues while decompressing clipboard"
-	}
-	_ = zr.Close()
-	return string(decompressed)
-}
-
 func runGetClipCommand() string {
 	var out []byte
 	var err error
@@ -336,7 +332,7 @@ func runGetClipCommand() string {
 	}
 	if out, err = cmd.Output(); err != nil {
 		handleError(err)
-		return "An error occurred wile getting the local clipboard"
+		return "An error occurred while getting the local clipboard"
 	}
 	if runtime.GOOS == "windows" {
 		return strings.TrimSuffix(string(out), "\r\n") // powershell's get-clipboard adds a windows newline to the end for some reason
@@ -345,8 +341,7 @@ func runGetClipCommand() string {
 }
 
 func getLocalClip() string {
-	str := runGetClipCommand()
-	return str
+	return runGetClipCommand()
 }
 
 func setLocalClip(s string) {
