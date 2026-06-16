@@ -66,6 +66,10 @@ Then move the `clipport` binary onto your `PATH` (e.g. `/usr/local/bin` on macOS
 
 Delete the `clipport` binary from wherever you placed it.
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, workflow, and branching conventions. See [CHANGELOG.md](CHANGELOG.md) for notable changes.
+
 ## Any other business
 
 Have a question, idea or just want to share something? Head over to [Issues](https://github.com/tsyche/clipport/issues)

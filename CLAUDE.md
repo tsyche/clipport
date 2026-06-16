@@ -26,14 +26,15 @@ just sync-docs   # copy newer of CLAUDE.md/AGENTS.md over the other
 - `clipport_test.go` — crypto unit tests
 - `.goreleaser.yml` — release config (cross-compile + brew tap)
 - `flake.nix` — Nix build
+- `CONTRIBUTING.md` — setup, workflow, and branching conventions for contributors
 
 ## Architecture
 
 Single-file Go app. One device runs as server (`makeServer`), others connect as clients (`ConnectToServer`). The server broadcasts clipboard changes to all connected clients. Encryption is opt-in via `--secure` with a shared password.
 
-## Branch notes
+## Fork notes
 
-- `add-custom-ports` — adds `-p`/`--port` flag to pin listen port instead of randomizing
 - Fork remote: `https://github.com/tsyche/clipport`
 - Upstream: `https://github.com/quackduck/uniclip`
-- Renamed from `uniclip` to `clipport` to give the fork its own identity
+- Renamed from `uniclip` to `clipport`, and the `-p`/`--port` flag (pins the listen port instead of randomizing) added, then merged into `main`
+- Default branch renamed `master` → `main`

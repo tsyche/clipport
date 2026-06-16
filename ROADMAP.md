@@ -37,7 +37,6 @@ Lower priority / not clearly actionable yet:
 - **Transport security for non-`--secure` mode** — cleartext mode has no authentication between peers; anyone who can reach the port can join the clipboard. Worth at least documenting as a known limitation if not fixing.
 - **Reconnect on dropped connection** — clients currently just exit (`return` on EOF) rather than retrying; a flaky network kills the session permanently.
 - **`flake.nix` `vendorSha256` staleness check** — unverified against current `go.mod`/`go.sum` since the rebrand; likely fine but not confirmed.
-- **CONTRIBUTING.md** — no contribution guide exists yet for the fork.
 
 ## Notes
 
