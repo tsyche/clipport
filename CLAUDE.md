@@ -1,13 +1,13 @@
-# Uniclip
+# Clipport
 
-Cross-platform shared clipboard over TCP. Copy on one device, paste on another — no account required.
+Cross-platform shared clipboard over TCP. Copy on one device, paste on another — no account required. Fork of [quackduck/uniclip](https://github.com/quackduck/uniclip).
 
 ## Stack
 
 - **Language**: Go (single binary, no CGO)
 - **Clipboard**: platform-native (`pbpaste`/`pbcopy` on macOS, `clip`/powershell on Windows, `xclip`/`xsel`/`wl-paste` on Linux)
 - **Encryption**: AES-256-GCM via scrypt key derivation (`--secure` mode)
-- **Release**: goreleaser cross-compiles for darwin/linux/windows × amd64/arm/arm64
+- **Release**: goreleaser cross-compiles for darwin/linux/windows × amd64/arm/arm64 (brew tap config still points at upstream quackduck's tap — not yet set up for this fork)
 
 ## Key commands
 
@@ -20,8 +20,8 @@ just clean    # remove binary
 
 ## Key files
 
-- `uniclip.go` — all application logic (single file)
-- `uniclip_test.go` — crypto unit tests
+- `clipport.go` — all application logic (single file)
+- `clipport_test.go` — crypto unit tests
 - `.goreleaser.yml` — release config (cross-compile + brew tap)
 - `flake.nix` — Nix build
 
@@ -32,5 +32,6 @@ Single-file Go app. One device runs as server (`makeServer`), others connect as 
 ## Branch notes
 
 - `add-custom-ports` — adds `-p`/`--port` flag to pin listen port instead of randomizing
-- Fork remote: `https://github.com/tsyche/uniclip`
+- Fork remote: `https://github.com/tsyche/clipport`
 - Upstream: `https://github.com/quackduck/uniclip`
+- Renamed from `uniclip` to `clipport` to give the fork its own identity

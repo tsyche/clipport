@@ -27,19 +27,19 @@ import (
 
 var (
 	secondsBetweenChecksForClipChange = 1
-	helpMsg                           = `Uniclip - Universal Clipboard
-With Uniclip, you can copy from one device and paste on another.
+	helpMsg                           = `Clipport - Universal Clipboard
+With Clipport, you can copy from one device and paste on another.
 
-Usage: uniclip [--port/-p] [--secure/-s] [--debug/-d] [ <address> | --help/-h ]
+Usage: clipport [--port/-p] [--secure/-s] [--debug/-d] [ <address> | --help/-h ]
 Examples:
-   uniclip                                   # start a new clipboard with randomized port
-   uniclip -p 6666                           # start a new clipboard on a set port number
-   uniclip -d                                # start a new clipboard with debug output
-   uniclip 192.168.86.24:53701               # join the clipboard at 192.168.86.24:53701
-   uniclip -d --secure 192.168.86.24:53701   # join the clipboard with debug output and enable encryption
-Running just ` + "`uniclip`" + ` will start a new clipboard.
+   clipport                                   # start a new clipboard with randomized port
+   clipport -p 6666                           # start a new clipboard on a set port number
+   clipport -d                                # start a new clipboard with debug output
+   clipport 192.168.86.24:53701               # join the clipboard at 192.168.86.24:53701
+   clipport -d --secure 192.168.86.24:53701   # join the clipboard with debug output and enable encryption
+Running just ` + "`clipport`" + ` will start a new clipboard.
 It will also provide an address with which you can connect to the same clipboard with another device.
-Refer to https://github.com/quackduck/uniclip for more information`
+Refer to https://github.com/tsyche/clipport for more information`
 	mu             sync.Mutex
 	listOfClients  = make([]*bufio.Writer, 0)
 	localClipboard string
@@ -117,7 +117,7 @@ func makeServer(port string) {
 	if port == "" {
 		port = strconv.Itoa(l.Addr().(*net.TCPAddr).Port)
 	}
-	fmt.Println("Run", "`uniclip", getOutboundIP().String()+":"+port+"`", "to join this clipboard")
+	fmt.Println("Run", "`clipport", getOutboundIP().String()+":"+port+"`", "to join this clipboard")
 	fmt.Println()
 	for {
 		c, err := l.Accept()
@@ -326,7 +326,7 @@ func runGetClipCommand() string {
 		} else if _, err = exec.LookPath("termux-clipboard-get"); err == nil {
 			cmd = exec.Command("termux-clipboard-get")
 		} else {
-			handleError(errors.New("sorry, uniclip won't work if you don't have xsel, xclip, wayland or Termux installed :(\nyou can create an issue at https://github.com/quackduck/uniclip/issues"))
+			handleError(errors.New("sorry, clipport won't work if you don't have xsel, xclip, wayland or Termux installed :(\nyou can create an issue at https://github.com/tsyche/clipport/issues"))
 			os.Exit(2)
 		}
 	}
@@ -361,7 +361,7 @@ func setLocalClip(s string) {
 		} else if _, err = exec.LookPath("termux-clipboard-set"); err == nil {
 			copyCmd = exec.Command("termux-clipboard-set")
 		} else {
-			handleError(errors.New("sorry, uniclip won't work if you don't have xsel, xclip, wayland or Termux:API installed :(\nyou can create an issue at https://github.com/quackduck/uniclip/issues"))
+			handleError(errors.New("sorry, clipport won't work if you don't have xsel, xclip, wayland or Termux:API installed :(\nyou can create an issue at https://github.com/tsyche/clipport/issues"))
 			os.Exit(2)
 		}
 	}

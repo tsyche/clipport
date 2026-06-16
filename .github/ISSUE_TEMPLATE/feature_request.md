@@ -1,6 +1,6 @@
 ---
 name: Feature request
-about: Suggest an idea for Uniclip
+about: Suggest an idea for Clipport
 title: 'Feature: '
 labels: enhancement
 assignees: ''

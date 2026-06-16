@@ -1,4 +1,4 @@
-module uniclip
+module clipport
 
 go 1.21
 

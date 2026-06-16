@@ -9,17 +9,17 @@
   outputs = { self, nixpkgs, flake-utils }: flake-utils.lib.eachDefaultSystem (system: let
     pkgs = nixpkgs.legacyPackages.${system};
   in rec {
-    packages.uniclip = pkgs.buildGoModule {
-      name = "uniclip";
+    packages.clipport = pkgs.buildGoModule {
+      name = "clipport";
       src = ./.;
       vendorSha256 = "sha256-Cmgb1BAAmQ5CnruNzCGKYd2qjTNttWemrlVIRHpfS2I=";
       meta = with pkgs.lib; {
         description = "Cross-platform shared clipboard";
-        homepage = "https://github.com/quackduck/uniclip";
+        homepage = "https://github.com/tsyche/clipport";
         license = licenses.mit;
         platforms = platforms.linux ++ platforms.darwin;
       };
     };
-    defaultPackage = packages.uniclip;
+    defaultPackage = packages.clipport;
   });
 }

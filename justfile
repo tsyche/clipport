@@ -4,7 +4,7 @@ default:
 
 # Build the binary
 build:
-    go build -o uniclip .
+    go build -o clipport .
 
 # Run all tests
 test:
@@ -16,7 +16,7 @@ lint:
 
 # Remove built binary
 clean:
-    rm -f uniclip
+    rm -f clipport
 
 # Full reset: clean and rebuild
 fresh: clean build

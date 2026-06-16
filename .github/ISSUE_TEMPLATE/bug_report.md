@@ -1,6 +1,6 @@
 ---
 name: Bug report
-about: Create a report to help improve Uniclip
+about: Create a report to help improve Clipport
 title: 'Bug: '
 labels: bug
 assignees: ''
@@ -17,6 +17,6 @@ assignees: ''
 
 **Expected behavior**
 
-**OS and Uniclip version**
+**OS and Clipport version**
 
 **Additional info**
