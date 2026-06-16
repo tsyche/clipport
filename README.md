@@ -43,7 +43,7 @@ Running just `clipport` will start a new clipboard.
 It will also provide an address with which you can connect to the same clipboard with another device.
 ```
 
-*Note: The devices have to be on the same local network (eg. connected to the same WiFi) unless the device has a public IP with all ports routed to it. (use the public IP instead of what Clipport prints in this case)*
+*Note: The devices have to be on the same local network (eg. connected to the same Wi-Fi) unless the device has a public IP with all ports routed to it. (use the public IP instead of what Clipport prints in this case)*
 
 ## Installing
 

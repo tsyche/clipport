@@ -22,11 +22,19 @@ Inferred from the codebase on 2026-06-16 (no prior ROADMAP.md existed). Single-f
 
 ## Inherited from upstream (quackduck/uniclip) — triaged 2026-06-16
 
-Checked the upstream repo's open issues against this fork's actual code (not just assumed carried over):
+Checked the upstream repository's open issues against this fork's actual code (not just assumed carried over):
 
-1. **Windows clipboard CRLF corruption** — `runGetClipCommand()` (clipport.go:337-338) only trims a *trailing* `\r\n` from PowerShell's `Get-Clipboard` output; internal `\r\n` line endings in multi-line text are left untouched. Upstream [quackduck/uniclip#35](https://github.com/quackduck/uniclip/issues/35) reports a client receiving a second, `\r\n`-corrupted copy of multi-line content. Upstream has an unmerged fix ([PR #36](https://github.com/quackduck/uniclip/pull/36)) doing `strings.ReplaceAll(str, "\r\n", "\n")` before trimming — straightforward to port. ~30 min.
-2. **Wayland + xclip picks the wrong backend** — `runGetClipCommand`/`setLocalClip` (clipport.go:320-325, 355-360) check `xclip` before `wl-paste`/`wl-copy`. On a Wayland session that happens to have `xclip` installed (common — some distros ship it for X11-compat apps), clipport silently fails with `exit status 1` instead of using the Wayland-native tool. Upstream: [quackduck/uniclip#26](https://github.com/quackduck/uniclip/issues/26). Fix: check `$WAYLAND_DISPLAY` first and prefer `wl-paste`/`wl-copy` when set. ~1 hr.
-3. **Endless error spam on non-text clipboard content** — when the system clipboard holds something `pbpaste`/`xclip`/etc. can't read as text (e.g. an image), `runGetClipCommand` (clipport.go:333-336) calls `handleError` and returns a sentinel string every poll cycle, forever, with no backoff or one-time warning. Upstream: [quackduck/uniclip#23](https://github.com/quackduck/uniclip/issues/23). Fix: rate-limit/dedupe the error or warn once and skip until clipboard content type changes. ~1-2 hrs.
+1. **Windows clipboard CRLF corruption**
+   `runGetClipCommand()` (clipport.go:337-338) only trims a *trailing* `\r\n` from PowerShell's `Get-Clipboard` output; internal `\r\n` line endings in multi-line text are left untouched.
+   Upstream [quackduck/uniclip#35](https://github.com/quackduck/uniclip/issues/35) reports a client receiving a second, `\r\n`-corrupted copy of multi-line content.
+   Upstream has an unmerged fix ([PR #36](https://github.com/quackduck/uniclip/pull/36)) doing `strings.ReplaceAll(str, "\r\n", "\n")` before trimming — straightforward to port. ~30 min.
+2. **Wayland + xclip picks the wrong backend**
+   `runGetClipCommand`/`setLocalClip` (clipport.go:320-325, 355-360) check `xclip` before `wl-paste`/`wl-copy`.
+   On a Wayland session that happens to have `xclip` installed (common — some distros ship it for X11-compat apps), clipport silently fails with `exit status 1` instead of using the Wayland-native tool.
+   Upstream: [quackduck/uniclip#26](https://github.com/quackduck/uniclip/issues/26). Fix: check `$WAYLAND_DISPLAY` first and prefer `wl-paste`/`wl-copy` when set. ~1 hr.
+3. **Endless error spam on non-text clipboard content**
+   When the system clipboard holds something `pbpaste`/`xclip`/etc. can't read as text (e.g. an image), `runGetClipCommand` (clipport.go:333-336) calls `handleError` and returns a sentinel string every poll cycle, forever, with no backoff or one-time warning.
+   Upstream: [quackduck/uniclip#23](https://github.com/quackduck/uniclip/issues/23). Fix: rate-limit/dedupe the error or warn once and skip until clipboard content type changes. ~1-2 hrs.
 
 Lower priority / not clearly actionable yet:
 - **"use of closed network connection" after Windows hibernation** ([quackduck/uniclip#32](https://github.com/quackduck/uniclip/issues/32)) — reporter couldn't reliably reproduce; revisit if it recurs for us.

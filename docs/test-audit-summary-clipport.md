@@ -5,7 +5,9 @@ Mode: lite | Run `--deep` for full deep-dive
 
 ## Summary
 
-**Overall health: poor.** 7 tests, all in `clipport_test.go`, all exercising only the crypto helpers (`encrypt`/`decrypt`/`deriveKey`) — 13.5% statement coverage measured live. The other 13 functions in `clipport.go`, including the actual clipboard-sync wire protocol, have zero tests. CI is currently misconfigured to not gate PRs at all (stale `master` branch references), and a markdownlint failure already happened once and will recur on the next push touching `ROADMAP.md`.
+**Overall health: poor.** 7 tests, all in `clipport_test.go`, all exercising only the crypto helpers (`encrypt`/`decrypt`/`deriveKey`) — 13.5% statement coverage measured live.
+
+The other 13 functions in `clipport.go`, including the actual clipboard-sync wire protocol, have zero tests. CI is currently misconfigured to not gate PRs at all (stale `master` branch references), and a markdownlint failure already happened once and will recur on the next push touching `ROADMAP.md`.
 
 ### Suite health scorecard
 
@@ -42,7 +44,7 @@ Mode: lite | Run `--deep` for full deep-dive
 
 ## Scope
 
-- Audited: `clipport.go` (415 lines, single `package main`) + `clipport_test.go` (115 lines) at repo root — tests are colocated with source, not an aggregated test repo.
+- Audited: `clipport.go` (415 lines, single `package main`) + `clipport_test.go` (115 lines) at the repository root — tests are colocated with source, not an aggregated test repository.
 - Framework: Go's built-in `testing` package, run via `go test` (`just test` → `go test -race ./...`).
 - Environment: none required — all 7 tests are pure unit tests with no external services, files, or network.
 - Excluded: nothing in scope was excluded; no test files found outside `clipport_test.go`.
@@ -89,7 +91,7 @@ The 3 crypto functions are reasonably well covered (roundtrip, wrong-key failure
 | CLI/arg parsing (`main`, `helpMsg`, flag setup) | ❌ | 0 tests. No coverage of `-p`/`--port`/`--secure`/`--debug` flag parsing or the too-many-arguments error path |
 | Error handling/logging (`handleError`, `debug`) | ❌ | 0 tests. Low value to test directly — thin wrappers |
 
-No UI in this project — accessibility dimension omitted (non-UI CLI tool).
+No UI in this project — accessibility dimension omitted (non-UI command-line tool).
 
 ## Skip/xfail inventory
 
@@ -98,7 +100,7 @@ None. No `t.Skip`, `t.Skipf`, or conditional skips found in `clipport_test.go`.
 ## Checklist probe results
 
 1. **CI triggers** — CodeQL: push+PR (both scoped to deleted `master`) + weekly cron. Linter: push (unscoped, fires on any branch) + PR (scoped to deleted `master`). No workflow runs `go test`. → feeds CI integration score and P0 #1.
-2. **Failure artifacts** — N/A, CLI tool, no UI test runner/trace concept applies.
+2. **Failure artifacts** — N/A, command-line tool, no UI test runner/trace concept applies.
 3. **Coverage wiring** — `go test -cover` works locally; not wired into any CI workflow, no gate, no badge.
 4. **Untracked skips** — none found (no skips exist).
 5. **Silent-green skips** — none found.
