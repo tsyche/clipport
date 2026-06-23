@@ -4,7 +4,10 @@ import (
 	"bufio"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/ecdh"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/gob"
 	"errors"
 	"flag"
@@ -13,6 +16,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -30,25 +34,43 @@ var (
 	helpMsg                           = `Clipport - Universal Clipboard
 With Clipport, you can copy from one device and paste on another.
 
-Usage: clipport [--port/-p] [--secure/-s] [--debug/-d] [ <address> | --help/-h ]
+Usage: clipport [--port/-p] [--secure/-s] [--key/-k] [--debug/-d] [ <address> | --help/-h ]
+       clipport keygen
 Examples:
    clipport                                   # start a new clipboard with randomized port
    clipport -p 6666                           # start a new clipboard on a set port number
    clipport -d                                # start a new clipboard with debug output
    clipport 192.168.86.24:53701               # join the clipboard at 192.168.86.24:53701
+   clipport 192.168.86.24 -p 53701            # same as above, host and port given separately
    clipport -d --secure 192.168.86.24:53701   # join the clipboard with debug output and enable encryption
+   clipport keygen                            # generate a clipport keypair for use with --key
+   clipport -k 192.168.86.24:53701            # join using keypair-based encryption instead of a password
 Running just ` + "`clipport`" + ` will start a new clipboard.
 It will also provide an address with which you can connect to the same clipboard with another device.
+With --secure, the password is read from the CLIPPORT_SECRET environment variable if set,
+otherwise you'll be prompted for it. Set CLIPPORT_SECRET on both machines to skip the prompt on both ends.
+With --key, each device uses its own keypair (run ` + "`clipport keygen`" + ` once per device) and no
+secret ever has to be typed or shared; the first connection to a given peer trusts its public key and
+remembers it under ~/.clipport/known_peers, warning loudly if that peer's key ever changes later.
+Connecting without --secure or --key will prompt for confirmation since the clipboard is sent in plaintext.
 Refer to https://github.com/tsyche/clipport for more information`
 	mu             sync.Mutex
-	listOfClients  = make([]*bufio.Writer, 0)
+	listOfClients  = make([]*client, 0)
 	localClipboard string
 	printDebugInfo = false
 	version        = "dev"
 	cryptoStrength = 16384
 	secure         = false
+	keyMode        = false
 	password       []byte
 )
+
+// client pairs a connected peer's writer with the encryption key negotiated
+// for that specific connection (nil if unencrypted).
+type client struct {
+	w   *bufio.Writer
+	key []byte
+}
 
 func main() {
 	var (
@@ -58,8 +80,10 @@ func main() {
 
 	flag.StringVar(&port, "p", "", "Specify the port to listen on")
 	flag.StringVar(&port, "port", "", "Specify the port to listen on")
-	flag.BoolVar(&secure, "s", false, "Encrypt your data")
-	flag.BoolVar(&secure, "secure", false, "Encrypt your data")
+	flag.BoolVar(&secure, "s", false, "Encrypt your data using a shared password")
+	flag.BoolVar(&secure, "secure", false, "Encrypt your data using a shared password")
+	flag.BoolVar(&keyMode, "k", false, "Encrypt your data using a clipport keypair (see `clipport keygen`)")
+	flag.BoolVar(&keyMode, "key", false, "Encrypt your data using a clipport keypair (see `clipport keygen`)")
 	flag.BoolVar(&printDebugInfo, "d", false, "Enable debug output")
 	flag.BoolVar(&printDebugInfo, "debug", false, "Enable debug output")
 	flag.BoolVar(&showVersion, "v", false, "Print version")
@@ -74,14 +98,13 @@ func main() {
 	}
 
 	args := flag.Args()
-
-	switch {
-	case len(args) > 1:
+	if len(args) == 1 && args[0] == "keygen" {
+		runKeygen()
+		return
+	}
+	if len(args) > 1 {
 		handleError(errors.New("too many arguments"))
 		fmt.Println(helpMsg)
-		return
-	case len(args) == 1:
-		ConnectToServer(args[0])
 		return
 	}
 
@@ -93,13 +116,258 @@ func main() {
 		}
 	}
 
-	if secure {
-		fmt.Print("Password for --secure: ")
-		password, _ = term.ReadPassword(int(syscall.Stdin))
-		fmt.Println()
+	if secure && keyMode {
+		fmt.Fprintln(os.Stderr, "error: use either -s (password) or -k (keypair), not both")
+		os.Exit(1)
+	}
+	if keyMode {
+		secure = true
+	}
+
+	if !secure {
+		if !confirmPlaintext() {
+			fmt.Println("Aborted.")
+			return
+		}
+	} else if !keyMode {
+		password = resolvePassword()
+	}
+
+	if len(args) == 1 {
+		address, err := resolveClientAddress(args[0], port)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
+		ConnectToServer(address)
+		return
 	}
 
 	makeServer(port)
+}
+
+// resolvePassword reads the secure-mode password from CLIPPORT_SECRET if set,
+// otherwise prompts for it interactively.
+func resolvePassword() []byte {
+	if v := os.Getenv("CLIPPORT_SECRET"); v != "" {
+		return []byte(v)
+	}
+	fmt.Print("Password for --secure: ")
+	pw, _ := term.ReadPassword(int(syscall.Stdin))
+	fmt.Println()
+	return pw
+}
+
+// resolveClientAddress combines a host (optionally with an embedded port) and
+// an optional -p port into a single dialable address, erroring if both are
+// given but disagree.
+func resolveClientAddress(addr, port string) (string, error) {
+	host, embeddedPort, err := net.SplitHostPort(addr)
+	if err != nil {
+		if port == "" {
+			return "", errors.New("no port specified: use host:port or -p")
+		}
+		return addr + ":" + port, nil
+	}
+	if port != "" && port != embeddedPort {
+		return "", fmt.Errorf("conflicting ports: %s in address vs -p %s", embeddedPort, port)
+	}
+	return host + ":" + embeddedPort, nil
+}
+
+// confirmPlaintext warns the user that no encryption was requested and asks
+// for confirmation before continuing.
+func confirmPlaintext() bool {
+	fmt.Print("Warning: no encryption requested (-s or -k). Clipboard contents will be sent in plaintext. Continue? [y/N] ")
+	line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+	line = strings.TrimSpace(strings.ToLower(line))
+	return line == "y" || line == "yes"
+}
+
+// resolveConnectionKey determines the encryption key for a single connection:
+// nil for plaintext, the shared password in -s mode, or an ECDH-derived
+// secret unique to this peer in -k mode.
+func resolveConnectionKey(c net.Conn, isServer bool, dialedAddress string) ([]byte, error) {
+	if !secure {
+		return nil, nil
+	}
+	if !keyMode {
+		return password, nil
+	}
+
+	priv, err := loadKeypair()
+	if err != nil {
+		return nil, err
+	}
+	pubBytes := priv.PublicKey().Bytes()
+
+	if _, err := c.Write(pubBytes); err != nil {
+		return nil, err
+	}
+	peerBytes := make([]byte, 32)
+	if _, err := io.ReadFull(c, peerBytes); err != nil {
+		return nil, err
+	}
+	peerPub, err := ecdh.X25519().NewPublicKey(peerBytes)
+	if err != nil {
+		return nil, fmt.Errorf("invalid peer public key: %w", err)
+	}
+
+	var peerID string
+	if isServer {
+		peerID, _, err = net.SplitHostPort(c.RemoteAddr().String())
+	} else {
+		peerID, _, err = net.SplitHostPort(dialedAddress)
+	}
+	if err != nil {
+		peerID = c.RemoteAddr().String()
+	}
+
+	localErr := verifyOrTrustPeer(peerID, peerBytes)
+	status := byte(1)
+	if localErr != nil {
+		status = 0
+	}
+	if _, err := c.Write([]byte{status}); err != nil {
+		return nil, err
+	}
+	peerStatus := make([]byte, 1)
+	if _, err := io.ReadFull(c, peerStatus); err != nil {
+		return nil, err
+	}
+	if localErr != nil {
+		return nil, localErr
+	}
+	if peerStatus[0] == 0 {
+		return nil, errors.New("peer rejected the connection (its key verification failed on its end)")
+	}
+
+	return priv.ECDH(peerPub)
+}
+
+// clipportDir returns ~/.clipport, creating it if necessary.
+func clipportDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(home, ".clipport")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return "", err
+	}
+	return dir, nil
+}
+
+// runKeygen generates a new X25519 keypair for --key mode and stores it
+// under ~/.clipport, refusing to overwrite an existing key.
+func runKeygen() {
+	dir, err := clipportDir()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(1)
+	}
+	keyPath := filepath.Join(dir, "key")
+	if _, err := os.Stat(keyPath); err == nil {
+		fmt.Fprintf(os.Stderr, "error: a key already exists at %s, remove it first to regenerate\n", keyPath)
+		os.Exit(1)
+	}
+	priv, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(1)
+	}
+	pub := priv.PublicKey().Bytes()
+	if err := os.WriteFile(keyPath, priv.Bytes(), 0600); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(1)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "key.pub"), pub, 0600); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(1)
+	}
+	fmt.Println("Generated clipport key at", keyPath)
+	fmt.Println("Fingerprint:", fingerprint(pub))
+}
+
+// loadKeypair reads the device's clipport keypair, generated by `clipport keygen`.
+func loadKeypair() (*ecdh.PrivateKey, error) {
+	dir, err := clipportDir()
+	if err != nil {
+		return nil, err
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "key"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, errors.New("no clipport key found, run `clipport keygen` first")
+		}
+		return nil, err
+	}
+	return ecdh.X25519().NewPrivateKey(raw)
+}
+
+// verifyOrTrustPeer implements trust-on-first-connect: the first time a peer
+// ID is seen, its public key is recorded; on later connections, a changed
+// key aborts loudly instead of silently proceeding.
+func verifyOrTrustPeer(peerID string, pubKey []byte) error {
+	dir, err := clipportDir()
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(dir, "known_peers")
+	peers, err := loadKnownPeers(path)
+	if err != nil {
+		return err
+	}
+	encoded := base64.StdEncoding.EncodeToString(pubKey)
+	if existing, ok := peers[peerID]; ok {
+		if existing != encoded {
+			return fmt.Errorf("WARNING: public key for %s has changed since the last connection.\n"+
+				"This could mean someone is impersonating that peer, or it legitimately regenerated its key.\n"+
+				"If this is expected, remove the %q line from %s and reconnect", peerID, peerID, path)
+		}
+		return nil
+	}
+	peers[peerID] = encoded
+	if err := saveKnownPeers(path, peers); err != nil {
+		return err
+	}
+	fmt.Printf("Trusting new peer %s (fingerprint %s)\n", peerID, fingerprint(pubKey))
+	return nil
+}
+
+func loadKnownPeers(path string) (map[string]string, error) {
+	peers := make(map[string]string)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return peers, nil
+		}
+		return nil, err
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, " ", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		peers[parts[0]] = parts[1]
+	}
+	return peers, nil
+}
+
+func saveKnownPeers(path string, peers map[string]string) error {
+	var b strings.Builder
+	for id, key := range peers {
+		fmt.Fprintf(&b, "%s %s\n", id, key)
+	}
+	return os.WriteFile(path, []byte(b.String()), 0600)
+}
+
+func fingerprint(pubKey []byte) string {
+	sum := sha256.Sum256(pubKey)
+	return base64.StdEncoding.EncodeToString(sum[:])
 }
 
 func makeServer(port string) {
@@ -125,24 +393,54 @@ func makeServer(port string) {
 			handleError(err)
 			return
 		}
+		enableKeepAlive(c)
 		fmt.Println("Connected to device at " + c.RemoteAddr().String())
 		go HandleClient(c)
 	}
 }
 
-// Handle a client as a server
-func HandleClient(c net.Conn) {
-	w := bufio.NewWriter(c)
-	mu.Lock()
-	listOfClients = append(listOfClients, w)
-	mu.Unlock()
-	defer c.Close()
-	go MonitorSentClips(bufio.NewReader(c))
-	MonitorLocalClip(w)
+// enableKeepAlive turns on OS-level TCP keepalive probes so that idle
+// connections dropped by NAT/firewall timeouts are detected instead of
+// silently hanging until the next write.
+func enableKeepAlive(c net.Conn) {
+	tc, ok := c.(*net.TCPConn)
+	if !ok {
+		return
+	}
+	_ = tc.SetKeepAlive(true)
+	_ = tc.SetKeepAlivePeriod(30 * time.Second)
 }
 
-// Connect to the server (which starts a new clipboard)
+// Handle a client as a server
+func HandleClient(c net.Conn) {
+	defer c.Close()
+	key, err := resolveConnectionKey(c, true, "")
+	if err != nil {
+		handleError(err)
+		return
+	}
+	w := bufio.NewWriter(c)
+	cl := &client{w: w, key: key}
+	mu.Lock()
+	listOfClients = append(listOfClients, cl)
+	mu.Unlock()
+	go MonitorSentClips(bufio.NewReader(c), key)
+	MonitorLocalClip(w, key)
+}
+
+// Connect to the server (which starts a new clipboard), reconnecting
+// automatically if the connection drops while the server is still up.
 func ConnectToServer(address string) {
+	for {
+		connectOnce(address)
+		fmt.Println("Reconnecting...")
+		time.Sleep(3 * time.Second)
+	}
+}
+
+// connectOnce dials the server and runs the clipboard sync until either
+// direction of the connection fails, then returns.
+func connectOnce(address string) {
 	c, err := net.Dial("tcp4", address)
 	if c == nil {
 		handleError(err)
@@ -153,20 +451,34 @@ func ConnectToServer(address string) {
 		handleError(err)
 		return
 	}
-	defer func() { _ = c.Close() }()
+	enableKeepAlive(c)
+
+	key, err := resolveConnectionKey(c, false, address)
+	if err != nil {
+		handleError(err)
+		_ = c.Close()
+		return
+	}
 	fmt.Printf("Connected to the clipboard at %s\n", address)
-	go MonitorSentClips(bufio.NewReader(c))
-	MonitorLocalClip(bufio.NewWriter(c))
+
+	done := make(chan struct{})
+	go func() {
+		MonitorSentClips(bufio.NewReader(c), key)
+		close(done)
+	}()
+	MonitorLocalClip(bufio.NewWriter(c), key)
+	_ = c.Close()
+	<-done
 }
 
 // monitors for changes to the local clipboard and writes them to w
-func MonitorLocalClip(w *bufio.Writer) {
+func MonitorLocalClip(w *bufio.Writer, key []byte) {
 	for {
 		mu.Lock()
 		localClipboard = getLocalClip()
 		mu.Unlock()
 		debug("localClipboard changed. localClipboard =", localClipboard)
-		err := sendClipboard(w, localClipboard)
+		err := sendClipboard(w, localClipboard, key)
 		if err != nil {
 			handleError(err)
 			return
@@ -178,7 +490,7 @@ func MonitorLocalClip(w *bufio.Writer) {
 }
 
 // monitors for clipboards sent through r
-func MonitorSentClips(r *bufio.Reader) {
+func MonitorSentClips(r *bufio.Reader, key []byte) {
 	var foreignClipboard string
 	var foreignClipboardBytes []byte
 	for {
@@ -192,8 +504,8 @@ func MonitorSentClips(r *bufio.Reader) {
 		}
 
 		// decrypt if needed
-		if secure {
-			foreignClipboardBytes, err = decrypt(password, foreignClipboardBytes)
+		if key != nil {
+			foreignClipboardBytes, err = decrypt(key, foreignClipboardBytes)
 			if err != nil {
 				handleError(err)
 				continue
@@ -213,7 +525,7 @@ func MonitorSentClips(r *bufio.Reader) {
 		mu.Lock()
 		for i := range listOfClients {
 			if listOfClients[i] != nil {
-				err = sendClipboard(listOfClients[i], foreignClipboard)
+				err = sendClipboard(listOfClients[i].w, foreignClipboard, listOfClients[i].key)
 				if err != nil {
 					listOfClients[i] = nil
 					fmt.Println("Error when trying to send the clipboard to a device. Will not contact that device again.")
@@ -224,13 +536,13 @@ func MonitorSentClips(r *bufio.Reader) {
 	}
 }
 
-// sendClipboard encrypts data if secure mode is enabled, then sends it
-func sendClipboard(w *bufio.Writer, clipboard string) error {
+// sendClipboard encrypts data with key if non-nil, then sends it
+func sendClipboard(w *bufio.Writer, clipboard string, key []byte) error {
 	var clipboardBytes []byte
 	var err error
 	clipboardBytes = []byte(clipboard)
-	if secure {
-		clipboardBytes, err = encrypt(password, clipboardBytes)
+	if key != nil {
+		clipboardBytes, err = encrypt(key, clipboardBytes)
 		if err != nil {
 			return err
 		}
