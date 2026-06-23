@@ -7,17 +7,19 @@ Thanks for considering a contribution to Clipport. This is a small fork — keep
 ```sh
 git clone https://github.com/tsyche/clipport.git
 cd clipport
+just setup
 just build
 ```
 
 ## Workflow
 
 ```sh
-just test   # go test -race ./...
-just lint   # go vet ./...
+just test      # go test -race ./...
+just lint      # go vet ./...
+just lintfix   # gofmt -w .
 ```
 
-Run both before opening a PR. See `CLAUDE.md`/`AGENTS.md` for architecture notes and key files.
+Run `test` and `lint` before opening a PR. See `CLAUDE.md`/`AGENTS.md` for architecture notes and key files.
 
 ## Branching
 

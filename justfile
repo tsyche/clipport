@@ -2,6 +2,10 @@
 default:
     just --list
 
+# Download dependencies
+setup:
+    go mod download
+
 # Build the binary
 build:
     go build -o clipport .
@@ -13,6 +17,10 @@ test:
 # Run go vet
 lint:
     go vet ./...
+
+# Auto-format source files
+lintfix:
+    gofmt -w .
 
 # Remove built binary
 clean:
