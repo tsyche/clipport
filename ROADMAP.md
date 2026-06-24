@@ -4,20 +4,19 @@ Inferred from the codebase on 2026-06-16 (no prior ROADMAP.md existed); audited 
 
 ## Recently Completed
 
-1. **Reconnect + TCP keepalive** — client auto-reconnects on a dropped connection instead of exiting; keepalive enabled on every connection to catch NAT/firewall idle timeouts (this was a standing backlog item, now done)
-2. **Per-device keypair encryption** — `-k`/`--key` mode: `clipport keygen` generates an X25519 keypair, connections derive a shared secret via ECDH, peers trusted-on-first-connect (`~/.clipport/known_peers`) with a loud abort on key mismatch
-3. **Plaintext confirmation gate** — connecting without `-s` or `-k` now warns and requires confirmation, partially addressing the transport-security backlog item below
-4. **`CLIPPORT_SECRET` env var + flexible client addressing** — skips the `--secure` password prompt when set; client accepts `host -p port` as an alternative to `host:port`
-5. **Custom listen port** — `-p`/`--port` flag to pin the server port instead of randomizing
+1. **CI workflow running `go test -race ./...`** — added `.github/workflows/test.yml`; the suite now gates every push/PR to `main` instead of only running when someone remembers `just test` locally
+2. **Reconnect + TCP keepalive** — client auto-reconnects on a dropped connection instead of exiting; keepalive enabled on every connection to catch NAT/firewall idle timeouts (this was a standing backlog item, now done)
+3. **Per-device keypair encryption** — `-k`/`--key` mode: `clipport keygen` generates an X25519 keypair, connections derive a shared secret via ECDH, peers trusted-on-first-connect (`~/.clipport/known_peers`) with a loud abort on key mismatch
+4. **Plaintext confirmation gate** — connecting without `-s` or `-k` now warns and requires confirmation, partially addressing the transport-security backlog item below
+5. **`CLIPPORT_SECRET` env var + flexible client addressing** — skips the `--secure` password prompt when set; client accepts `host -p port` as an alternative to `host:port`
 
 ## Top 3 Suggested Tasks
 
-1. **Add a CI workflow that runs `go test -race ./...`** — ~1 hour
-   - Verified 2026-06-23: neither `codeql-analysis.yml` nor `linter.yml` runs the test suite — only a security scan and a markdown/secrets linter. The suite (and `just test`) only runs if someone remembers to run it locally. Highest impact-to-effort ratio of anything on this roadmap right now, especially with new untested networking/crypto code landing (see Backlog).
-2. **Harden the wire protocol against oversized/malformed frames** — ~2-3 hours
+1. **Harden the wire protocol against oversized/malformed frames** — ~2-3 hours
    - `gob.NewDecoder(r).Decode(...)` in `MonitorSentClips` (clipport.go:497) has no message-size cap — a malicious or buggy peer could send an unbounded payload; add a `io.LimitReader` or explicit max-size check before decoding
-3. **Root-cause the empty-clipboard workaround** — ~1-2 hours
+2. **Root-cause the empty-clipboard workaround** — ~1-2 hours
    - `clipport.go:516` has a `// hacky way to prevent empty clipboard TODO: find out why empty cb happens` — currently just silently drops empty payloads instead of fixing the source
+3. **Test coverage for new networking/crypto code** — now that CI actually gates PRs, this is the next highest-value item; see Backlog for full context. Deliberately still deferred per project notes — pick up when ready.
 
 ## Inherited from upstream (quackduck/uniclip) — triaged 2026-06-16
 
