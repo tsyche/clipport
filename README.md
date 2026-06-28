@@ -4,7 +4,7 @@ Apple users, did you know you could copy from one device and paste on the other?
 
 Now you can, Apple device or not!
 
-You don't even have to sign in like you need to on Apple devices. You don't have to install Go either!
+You don't even have to sign in like you need to on Apple devices.
 
 *Clipport is a fork of [quackduck/uniclip](https://github.com/quackduck/uniclip) with a pinnable listen port (`-p`/`--port`), automatic reconnect, and an optional per-device keypair (`-k`/`--key`) as an alternative to a shared password.*
 
@@ -67,17 +67,19 @@ By default, clipport asks for confirmation before sending your clipboard in plai
 
 Use one or the other, not both.
 
+Secure connections (`-k` or `-s`) reconnect automatically if the link drops. Plaintext connections exit on drop instead of reconnecting, to avoid silently re-admitting an unverifiable peer.
+
 ## Installing
 
-Clipport isn't published to any package managers yet — build it from source with Go:
+Download a pre-built binary for your platform from the [GitHub Releases](https://github.com/tsyche/clipport/releases) page, then move it onto your `PATH` (e.g. `/usr/local/bin` on macOS/Linux).
+
+Or build from source with Go:
 
 ```sh
 git clone https://github.com/tsyche/clipport.git
 cd clipport
 go build -o clipport .
 ```
-
-Then move the `clipport` binary onto your `PATH` (e.g. `/usr/local/bin` on macOS/Linux).
 
 ### Runtime dependencies
 
