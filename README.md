@@ -71,16 +71,49 @@ Secure connections (`-k` or `-s`) reconnect automatically if the link drops. Pla
 
 ## Installing
 
-**1. macOS (Homebrew) — easiest:**
+### macOS
+
 ```sh
-brew tap tsyche/tap
-brew install clipport
+brew install tsyche/tap/clipport
 ```
 
-**2. Pre-built binary — all platforms:**
-Download the archive for your platform from the [GitHub Releases](https://github.com/tsyche/clipport/releases) page, extract it, and move the binary onto your `PATH` (e.g. `/usr/local/bin` on macOS/Linux).
+Or grab a binary from the [releases page](https://github.com/tsyche/clipport/releases) and move it to `/usr/local/bin/clipport`.
 
-**3. Build from source — requires Go:**
+### Linux
+
+```sh
+brew install tsyche/tap/clipport
+```
+
+Or grab a binary from the [releases page](https://github.com/tsyche/clipport/releases) and move it to `/usr/local/bin/clipport`.
+
+> **Note:** at least one of `xsel`, `xclip`, or `wl-clipboard` is required.
+
+### NixOS / Nix
+
+```sh
+nix run github:tsyche/clipport
+```
+
+Or to install permanently:
+
+```sh
+nix profile install github:tsyche/clipport
+```
+
+### Windows
+
+Grab a binary from the [releases page](https://github.com/tsyche/clipport/releases) and place it somewhere on your `PATH`.
+
+### Android (Termux)
+
+1. Install [Termux](https://termux.dev) and the [Termux:API](https://play.google.com/store/apps/details?id=com.termux.api) app
+2. Run `pkg install termux-api` inside Termux
+3. Grab the `linux_arm64` binary from the [releases page](https://github.com/tsyche/clipport/releases) and move it to `$PREFIX/usr/bin/clipport`
+
+### Build from source
+
+Requires Go:
 
 ```sh
 git clone https://github.com/tsyche/clipport.git
@@ -88,16 +121,14 @@ cd clipport
 go build -o clipport .
 ```
 
-### Runtime dependencies
-
-- **GNU/Linux**: at least one of `xsel`, `xclip`, or `wl-clipboard` (Wayland) is needed
-- **Android (Termux)**: install the Termux:API app from the Play Store, then run `pkg install termux-api`
-
 ## Uninstalling
 
-**macOS (Homebrew):** `brew uninstall clipport`
-
-**Otherwise:** delete the `clipport` binary from wherever you placed it.
+| Method | Command |
+|--------|---------|
+| Homebrew | `brew uninstall clipport` |
+| Nix | `nix profile remove clipport` |
+| Manual | Delete the `clipport` binary from wherever you placed it |
+| Termux | Delete `$PREFIX/usr/bin/clipport` |
 
 ## Contributing
 
