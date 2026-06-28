@@ -49,8 +49,7 @@ Lower priority / not clearly actionable yet:
 
 ## Backlog
 
-- **Set up this fork's own distribution** — ~2-4 hours
-  - `.goreleaser.yml` still points at the upstream `quackduck` Homebrew tap and homepage; this fork has no published releases. Deliberately deferred by design (per project notes) — pick this up when ready to cut a real release.
+- **Homebrew tap** — create `tsyche/homebrew-tap` and wire up the `brews` section in `.goreleaser.yml`; goreleaser + GitHub Actions release workflow are already in place.
 - **Transport security for non-encrypted mode** — cleartext mode still has no authentication between peers; anyone who can reach the port can join the clipboard. The plaintext confirmation gate (added 2026-06-23) at least makes this an explicit, opt-in choice rather than a silent default — but the underlying gap (no auth) is unchanged.
 - **Test coverage for new networking/crypto code** — the 2026-06-23 changes (ECDH handshake,
   TOFU trust store, reconnect loop, keygen, CLI flag combining) shipped with no new tests;

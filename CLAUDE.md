@@ -7,7 +7,7 @@ Cross-platform shared clipboard over TCP. Copy on one device, paste on another �
 - **Language**: Go (single binary, no CGO)
 - **Clipboard**: platform-native (`pbpaste`/`pbcopy` on macOS, `clip`/powershell on Windows, `xclip`/`xsel`/`wl-paste` on Linux)
 - **Encryption**: AES-256-GCM, keyed either via scrypt over a shared password (`--secure`/`-s`) or an ECDH-derived secret from a per-device X25519 keypair (`--key`/`-k`, generated with `clipport keygen`)
-- **Release**: goreleaser cross-compiles for darwin/linux/windows/freebsd × amd64/arm/arm64/386 (excluding windows/arm64; brew tap config still points at upstream quackduck's tap — not yet set up for this fork)
+- **Release**: goreleaser cross-compiles for darwin/linux/windows/freebsd × amd64/arm/arm64/386 (excluding windows/arm64); push a `v*` tag to trigger the GitHub Actions release workflow and publish binaries to GitHub Releases (brew tap not yet configured)
 
 ## Key commands
 
