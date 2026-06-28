@@ -49,6 +49,8 @@ Lower priority / not clearly actionable yet:
 
 ## Backlog
 
+- **AUR package (Arch/Manjaro)** — goreleaser v2 has native `aurs` support; requires an AUR account, an SSH keypair, and the private key added as a GitHub Actions secret (`AUR_SSH_PRIVATE_KEY`). ~30 min once prerequisites are in place.
+- **Scoop bucket (Windows)** — goreleaser has native `scoops` support; create a `scoop-bucket` repository under `tsyche`, wire it up in `.goreleaser.yml` similarly to the Homebrew tap. ~20 min.
 - **Transport security for non-encrypted mode** — cleartext mode still has no authentication between peers; anyone who can reach the port can join the clipboard. The plaintext confirmation gate (added 2026-06-23) at least makes this an explicit, opt-in choice rather than a silent default — but the underlying gap (no auth) is unchanged.
 - **Test coverage for new networking/crypto code** — the 2026-06-23 changes (ECDH handshake,
   TOFU trust store, reconnect loop, keygen, CLI flag combining) shipped with no new tests;
