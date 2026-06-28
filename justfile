@@ -29,6 +29,10 @@ clean:
 # Full reset: clean and rebuild
 fresh: clean build
 
+# Install binary to /usr/local/bin
+install: build
+    mv clipport /usr/local/bin/clipport
+
 # Sync CLAUDE.md and AGENTS.md (copies newer file to the other)
 sync-docs:
     #!/usr/bin/env bash

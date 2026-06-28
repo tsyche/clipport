@@ -47,3 +47,15 @@ changelog:
     exclude:
       - '^docs:'
       - '^test:'
+
+brews:
+  - repository:
+      owner: tsyche
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    homepage: 'https://github.com/tsyche/clipport'
+    description: 'Cross-platform shared clipboard over TCP'
+    install: |
+      bin.install "clipport"
+    test: |
+      system "#{bin}/clipport", "--help"
