@@ -7,7 +7,7 @@ Cross-platform shared clipboard over TCP. Copy on one device, paste on another �
 - **Language**: Go (single binary, no CGO)
 - **Clipboard**: platform-native (`pbpaste`/`pbcopy` on macOS, `clip`/powershell on Windows, `xclip`/`xsel`/`wl-paste` on Linux)
 - **Encryption**: AES-256-GCM, keyed either via scrypt over a shared password (`--secure`/`-s`) or an ECDH-derived secret from a per-device X25519 keypair (`--key`/`-k`, generated with `clipport keygen`)
-- **Release**: goreleaser cross-compiles for darwin/linux/windows/freebsd × amd64/arm/arm64/386 (excluding windows/arm64); push a `v*` tag to trigger the GitHub Actions release workflow and publish binaries to GitHub Releases (brew tap not yet configured)
+- **Release**: goreleaser cross-compiles for darwin/linux/windows/freebsd × amd64/arm/arm64/386 (excluding windows/arm64); push a `v*` tag to trigger the GitHub Actions release workflow, publish binaries to GitHub Releases, and push a formula to `tsyche/homebrew-tap`
 
 ## Key commands
 
@@ -19,6 +19,7 @@ just lint        # go vet ./...
 just lintfix     # gofmt -w .
 just clean       # remove binary
 just fresh       # clean + build
+just install     # build and install to /usr/local/bin
 just sync-docs   # copy newer of CLAUDE.md/AGENTS.md over the other
 ```
 
@@ -33,8 +34,8 @@ just sync-docs   # copy newer of CLAUDE.md/AGENTS.md over the other
 ## Architecture
 
 Single-file Go app. One device runs as server (`makeServer`), others connect as clients
-(`ConnectToServer`); the client reconnects automatically (with TCP keepalive on every
-connection) if the link drops. The server broadcasts clipboard changes to all connected
+(`ConnectToServer`); secure connections (`-k`/`-s`) reconnect automatically (with TCP
+keepalive on every connection) if the link drops; plaintext connections exit on drop. The server broadcasts clipboard changes to all connected
 clients. Encryption is opt-in: `--secure`/`-s` for a shared password, or `--key`/`-k` for a
 per-device keypair with trust-on-first-connect peer verification. Without either, clipport
 prompts for confirmation before sending the clipboard in plaintext.

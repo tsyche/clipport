@@ -71,9 +71,16 @@ Secure connections (`-k` or `-s`) reconnect automatically if the link drops. Pla
 
 ## Installing
 
-Download a pre-built binary for your platform from the [GitHub Releases](https://github.com/tsyche/clipport/releases) page, then move it onto your `PATH` (e.g. `/usr/local/bin` on macOS/Linux).
+**1. macOS (Homebrew) — easiest:**
+```sh
+brew tap tsyche/tap
+brew install clipport
+```
 
-Or build from source with Go:
+**2. Pre-built binary — all platforms:**
+Download the archive for your platform from the [GitHub Releases](https://github.com/tsyche/clipport/releases) page, extract it, and move the binary onto your `PATH` (e.g. `/usr/local/bin` on macOS/Linux).
+
+**3. Build from source — requires Go:**
 
 ```sh
 git clone https://github.com/tsyche/clipport.git
@@ -88,7 +95,9 @@ go build -o clipport .
 
 ## Uninstalling
 
-Delete the `clipport` binary from wherever you placed it.
+**macOS (Homebrew):** `brew uninstall clipport`
+
+**Otherwise:** delete the `clipport` binary from wherever you placed it.
 
 ## Contributing
 
