@@ -68,8 +68,9 @@ Refer to https://github.com/tsyche/clipport for more information`
 // client pairs a connected peer's writer with the encryption key negotiated
 // for that specific connection (nil if unencrypted).
 type client struct {
-	w   *bufio.Writer
-	key []byte
+	w    *bufio.Writer
+	key  []byte
+	addr string
 }
 
 func main() {
@@ -420,7 +421,7 @@ func HandleClient(c net.Conn) {
 		return
 	}
 	w := bufio.NewWriter(c)
-	cl := &client{w: w, key: key}
+	cl := &client{w: w, key: key, addr: c.RemoteAddr().String()}
 	mu.Lock()
 	listOfClients = append(listOfClients, cl)
 	mu.Unlock()
@@ -432,24 +433,26 @@ func HandleClient(c net.Conn) {
 // automatically if the connection drops while the server is still up.
 func ConnectToServer(address string) {
 	for {
-		connectOnce(address)
-		fmt.Println("Reconnecting...")
+		if !connectOnce(address) {
+			return
+		}
 		time.Sleep(3 * time.Second)
 	}
 }
 
 // connectOnce dials the server and runs the clipboard sync until either
-// direction of the connection fails, then returns.
-func connectOnce(address string) {
+// direction of the connection fails, then returns true if the caller should
+// reconnect or false if it should give up (e.g. plaintext connection dropped).
+func connectOnce(address string) bool {
 	c, err := net.Dial("tcp4", address)
 	if c == nil {
 		handleError(err)
 		fmt.Println("Could not connect to", address)
-		return
+		return true
 	}
 	if err != nil {
 		handleError(err)
-		return
+		return true
 	}
 	enableKeepAlive(c)
 
@@ -457,7 +460,7 @@ func connectOnce(address string) {
 	if err != nil {
 		handleError(err)
 		_ = c.Close()
-		return
+		return true
 	}
 	fmt.Printf("Connected to the clipboard at %s\n", address)
 
@@ -469,6 +472,14 @@ func connectOnce(address string) {
 	MonitorLocalClip(bufio.NewWriter(c), key)
 	_ = c.Close()
 	<-done
+
+	if key != nil {
+		fmt.Printf("Connection to %s lost. Reconnecting...\n", address)
+		return true
+	}
+	fmt.Printf("Connection to %s lost (unencrypted). Reconnecting without encryption is unsafe.\n", address)
+	fmt.Println("Use -k or -s for secure reconnections. Exiting.")
+	return false
 }
 
 // monitors for changes to the local clipboard and writes them to w
@@ -522,17 +533,30 @@ func MonitorSentClips(r *bufio.Reader, key []byte) {
 		localClipboard = foreignClipboard
 		mu.Unlock()
 		debug("rcvd:", foreignClipboard)
+		type dropInfo struct {
+			addr   string
+			secure bool
+		}
+		var dropped []dropInfo
 		mu.Lock()
 		for i := range listOfClients {
 			if listOfClients[i] != nil {
 				err = sendClipboard(listOfClients[i].w, foreignClipboard, listOfClients[i].key)
 				if err != nil {
+					dropped = append(dropped, dropInfo{addr: listOfClients[i].addr, secure: listOfClients[i].key != nil})
 					listOfClients[i] = nil
-					fmt.Println("Error when trying to send the clipboard to a device. Will not contact that device again.")
 				}
 			}
 		}
 		mu.Unlock()
+		for _, d := range dropped {
+			if d.secure {
+				fmt.Printf("warning: lost connection to %s. If the peer reconnects, their identity will be re-verified.\n", d.addr)
+			} else {
+				fmt.Printf("warning: lost connection to %s (unencrypted). This device cannot be safely re-admitted without identity verification.\n", d.addr)
+				fmt.Println("Use -k or -s to enable secure reconnections.")
+			}
+		}
 	}
 }
 
