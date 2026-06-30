@@ -422,7 +422,9 @@ func enableKeepAlive(c net.Conn) {
 
 // Handle a client as a server
 func HandleClient(c net.Conn) {
+	addr := c.RemoteAddr().String()
 	defer c.Close()
+	defer fmt.Println("Lost connection from", addr)
 	key, err := resolveConnectionKey(c, true, "")
 	if err != nil {
 		handleError(err)
@@ -507,7 +509,9 @@ func MonitorLocalClip(w *bufio.Writer, key []byte) {
 		debug("localClipboard changed. localClipboard =", localClipboard)
 		err := sendClipboard(w, localClipboard, key)
 		if err != nil {
-			handleError(err)
+			if !isNetworkDisconnect(err) {
+				handleError(err)
+			}
 			return
 		}
 		for localClipboard == getLocalClip() {
@@ -525,6 +529,9 @@ func MonitorSentClips(r *bufio.Reader, key []byte) bool {
 		if err != nil {
 			if err == io.EOF {
 				return true // clean shutdown by server
+			}
+			if isNetworkDisconnect(err) {
+				return false
 			}
 			handleError(err)
 			continue // continue getting next message
@@ -598,16 +605,21 @@ func sendClipboard(w *bufio.Writer, clipboard string, key []byte) error {
 }
 
 // Thanks to https://bruinsslot.jp/post/golang-crypto/ for crypto logic
+
+func newAESGCM(key []byte) (cipher.AEAD, error) {
+	blockCipher, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	return cipher.NewGCM(blockCipher)
+}
+
 func encrypt(key, data []byte) ([]byte, error) {
 	key, salt, err := deriveKey(key, nil)
 	if err != nil {
 		return nil, err
 	}
-	blockCipher, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, err
-	}
-	gcm, err := cipher.NewGCM(blockCipher)
+	gcm, err := newAESGCM(key)
 	if err != nil {
 		return nil, err
 	}
@@ -629,11 +641,7 @@ func decrypt(key, data []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	blockCipher, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, err
-	}
-	gcm, err := cipher.NewGCM(blockCipher)
+	gcm, err := newAESGCM(key)
 	if err != nil {
 		return nil, err
 	}
@@ -759,6 +767,14 @@ func handleError(err error) {
 	} else {
 		fmt.Fprintln(os.Stderr, "error: ["+err.Error()+"]")
 	}
+}
+
+// isNetworkDisconnect reports whether err is a network-level disconnect
+// (timeout, broken pipe, connection reset, etc.) on an already-established
+// connection. Used to suppress noisy-but-expected errors when a peer drops.
+func isNetworkDisconnect(err error) bool {
+	var netErr *net.OpError
+	return errors.As(err, &netErr)
 }
 
 func debug(a ...interface{}) {
