@@ -16,6 +16,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -386,6 +387,13 @@ func makeServer(port string) {
 	if port == "" {
 		port = strconv.Itoa(l.Addr().(*net.TCPAddr).Port)
 	}
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigs
+		fmt.Println("\nShutting down — connected devices will be notified.")
+		os.Exit(0)
+	}()
 	fmt.Println("Run", "`clipport", getOutboundIP().String()+":"+port+"`", "to join this clipboard")
 	fmt.Println()
 	for {
@@ -464,15 +472,23 @@ func connectOnce(address string) bool {
 	}
 	fmt.Printf("Connected to the clipboard at %s\n", address)
 
+	cleanShutdown := false
 	done := make(chan struct{})
 	go func() {
-		MonitorSentClips(bufio.NewReader(c), key)
+		if MonitorSentClips(bufio.NewReader(c), key) {
+			cleanShutdown = true
+			_ = c.Close() // unblock MonitorLocalClip immediately
+		}
 		close(done)
 	}()
 	MonitorLocalClip(bufio.NewWriter(c), key)
 	_ = c.Close()
 	<-done
 
+	if cleanShutdown {
+		fmt.Printf("Server at %s shut down. Exiting.\n", address)
+		return false
+	}
 	if key != nil {
 		fmt.Printf("Connection to %s lost. Reconnecting...\n", address)
 		return true
@@ -500,15 +516,15 @@ func MonitorLocalClip(w *bufio.Writer, key []byte) {
 	}
 }
 
-// monitors for clipboards sent through r
-func MonitorSentClips(r *bufio.Reader, key []byte) {
+// monitors for clipboards sent through r; returns true on clean server shutdown (EOF)
+func MonitorSentClips(r *bufio.Reader, key []byte) bool {
 	var foreignClipboard string
 	var foreignClipboardBytes []byte
 	for {
 		err := gob.NewDecoder(r).Decode(&foreignClipboardBytes)
 		if err != nil {
 			if err == io.EOF {
-				return // no need to monitor: disconnected
+				return true // clean shutdown by server
 			}
 			handleError(err)
 			continue // continue getting next message
@@ -558,6 +574,7 @@ func MonitorSentClips(r *bufio.Reader, key []byte) {
 			}
 		}
 	}
+	return false
 }
 
 // sendClipboard encrypts data with key if non-nil, then sends it
