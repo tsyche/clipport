@@ -47,6 +47,37 @@ Lower priority / not clearly actionable yet:
 3. **Distinguish permanent vs. transient reconnect failures** — ~1 hour
    - Related to the above: a `-k` peer-mismatch rejection is permanent (will never succeed by retrying) but currently gets the same "Reconnecting..." treatment as a transient network drop. Worth a distinct code path that stops retrying and tells the user to fix the key mismatch instead of looping.
 
+## Remote Connectivity (Cross-Network)
+
+Long-term feature area — requires `-k` mode only, local network operation unchanged.
+
+### Architecture: Pluggable Transport Interface
+
+Define a `Transport` interface so relay implementations can be swapped or chained without rewriting core logic. Fallback chains (try libp2p → fall back to relay) become trivial. Design this interface before building any specific transport.
+
+```
+clipport --remote                          # use default transport
+clipport --remote --transport=relay        # explicit relay
+clipport --remote --transport=libp2p,relay # libp2p with relay fallback
+```
+
+Security constraint: remote mode must require `-k`; clear error message if attempted without it. Plaintext over a relay is explicitly blocked.
+
+### Transport Options (roughly in implementation order)
+
+1. **Self-hosted relay on Fly.io** — simplest first step; deploy a small Go relay service, devices get short human-readable IDs (e.g. `pine-cloud-42`), relay sees only encrypted ciphertext. Free tier sufficient for personal use. ~1-2 days.
+
+2. **Nostr signaling** — use the existing Nostr relay network for peer discovery/rendezvous. Publish a signed "available" event with your public key, other side reads it and initiates connection. No account, no central authority, keypair model maps directly to clipport's existing `-k` infrastructure. Multiple public relays provide redundancy. ~2-3 days.
+
+3. **libp2p transport** — battle-tested NAT traversal, distributed relay discovery, no central coordinator. Used by IPFS and Ethereum. Most mature decentralized option but highest implementation complexity. ~1 week.
+
+4. **Waku signaling** — purpose-built decentralized messaging layer from the Ethereum/Status ecosystem. Privacy-preserving metadata design, censorship resistant. Similar role to Nostr but with stronger privacy guarantees and a growing dedicated relay network. ~3-5 days.
+
+### Notes
+- No blockchain transaction layer (Bitcoin/Ethereum on-chain) — fees and latency make it a bad fit
+- Nostr and Waku relay networks are the right layer to piggyback on, not the chains themselves
+- Headscale (self-hosted Tailscale coordination server) is an option for users who want the Tailscale UX without the account dependency, but requires running a server — not meaningfully simpler than the relay approach
+
 ## Backlog
 
 - **AUR package (Arch/Manjaro)** — goreleaser v2 has native `aurs` support; requires an AUR account, an SSH keypair, and the private key added as a GitHub Actions secret (`AUR_SSH_PRIVATE_KEY`). ~30 min once prerequisites are in place.

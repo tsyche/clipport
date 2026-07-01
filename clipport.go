@@ -424,7 +424,6 @@ func enableKeepAlive(c net.Conn) {
 func HandleClient(c net.Conn) {
 	addr := c.RemoteAddr().String()
 	defer c.Close()
-	defer fmt.Println("Lost connection from", addr)
 	key, err := resolveConnectionKey(c, true, "")
 	if err != nil {
 		handleError(err)
@@ -437,6 +436,22 @@ func HandleClient(c net.Conn) {
 	mu.Unlock()
 	go MonitorSentClips(bufio.NewReader(c), key)
 	MonitorLocalClip(w, key)
+
+	fmt.Println("Lost connection from", addr)
+	mu.Lock()
+	newClients := make([]*client, 0, len(listOfClients))
+	for _, existing := range listOfClients {
+		if existing != nil && existing != cl {
+			newClients = append(newClients, existing)
+		}
+	}
+	listOfClients = newClients
+	noClients := len(listOfClients) == 0
+	mu.Unlock()
+	if noClients {
+		fmt.Println("All devices disconnected. Exiting.")
+		os.Exit(0)
+	}
 }
 
 // Connect to the server (which starts a new clipboard), reconnecting
