@@ -596,7 +596,6 @@ func MonitorSentClips(r *bufio.Reader, key []byte) bool {
 			}
 		}
 	}
-	return false
 }
 
 // sendClipboard encrypts data with key if non-nil, then sends it
