@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-07-02
+
+### Fixed
+- Server no longer hangs indefinitely with a dead client still in its list: cleanup now
+  triggers on whichever side (read or write) detects the dropped connection first, instead
+  of only on the next local clipboard change
+
 ## [0.1.6] - 2026-07-01
 
 ### Changed

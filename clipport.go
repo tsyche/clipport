@@ -434,8 +434,23 @@ func HandleClient(c net.Conn) {
 	mu.Lock()
 	listOfClients = append(listOfClients, cl)
 	mu.Unlock()
-	go MonitorSentClips(bufio.NewReader(c), key)
-	MonitorLocalClip(w, key)
+
+	// Detecting a dead peer can come from either side: a read error on the
+	// client's sent clips (e.g. keepalive finally timing out), or a write
+	// error next time the local clipboard changes. Whichever happens first
+	// should trigger cleanup — don't block only on the write side, since the
+	// local clipboard may never change again.
+	finished := make(chan struct{}, 2)
+	go func() {
+		MonitorSentClips(bufio.NewReader(c), key)
+		finished <- struct{}{}
+	}()
+	go func() {
+		MonitorLocalClip(w, key)
+		finished <- struct{}{}
+	}()
+	<-finished
+	_ = c.Close() // unblock whichever goroutine is still running
 
 	fmt.Println("Lost connection from", addr)
 	mu.Lock()

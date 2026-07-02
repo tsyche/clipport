@@ -36,9 +36,9 @@ just sync-docs   # copy newer of CLAUDE.md/AGENTS.md over the other
 Single-file Go app. One device runs as server (`makeServer`), others connect as clients
 (`ConnectToServer`); secure connections (`-k`/`-s`) reconnect automatically (with TCP
 keepalive on every connection) if the link drops; plaintext connections exit on drop. The server broadcasts clipboard changes to all connected
-clients. Encryption is opt-in: `--secure`/`-s` for a shared password, or `--key`/`-k` for a
+clients, and exits once every connected client has disconnected (`HandleClient`). Encryption is opt-in: `--secure`/`-s` for a shared password, or `--key`/`-k` for a
 per-device keypair with trust-on-first-connect peer verification. Without either, clipport
-prompts for confirmation before sending the clipboard in plaintext.
+prompts for confirmation before sending the clipboard in plaintext. On Ctrl+C, the server propagates shutdown to connected clients via TCP FIN so they exit cleanly instead of trying to reconnect.
 
 ## Fork notes
 

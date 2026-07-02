@@ -69,6 +69,8 @@ Use one or the other, not both.
 
 Secure connections (`-k` or `-s`) reconnect automatically if the link drops. Plaintext connections exit on drop instead of reconnecting, to avoid silently re-admitting an unverifiable peer.
 
+The server exits automatically once every connected device has disconnected (or on Ctrl+C, which also tells connected clients to exit instead of trying to reconnect).
+
 ## Installing
 
 ### macOS

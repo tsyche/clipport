@@ -47,6 +47,13 @@ Lower priority / not clearly actionable yet:
 3. **Distinguish permanent vs. transient reconnect failures** — ~1 hour
    - Related to the above: a `-k` peer-mismatch rejection is permanent (will never succeed by retrying) but currently gets the same "Reconnecting..." treatment as a transient network drop. Worth a distinct code path that stops retrying and tells the user to fix the key mismatch instead of looping.
 
+## New Suggestions (2026-07-02)
+
+1. **Sleep/wake detection to speed up dead-peer recovery** — ~2-3 hours
+   - Both sides currently rely on TCP keepalive (30s period, several missed probes before the OS reports failure) to notice a peer that vanished during sleep — this can take minutes after wake before either side reacts. Detecting the local machine's own wake (e.g. macOS `NSWorkspace` sleep/wake notifications, or just noticing a large wall-clock gap between poll iterations) and immediately probing/closing stale connections instead of waiting out the full keepalive timeout would make recovery near-instant instead of "eventually."
+2. **Server re-announces or survives an IP change after reassociation** — ~half day, needs design
+   - The connect string (`clipport <ip>:<port>`) is printed once at server startup. If the server machine's Wi-Fi reassociates after sleep and gets a new DHCP lease, that printed IP goes stale and clients get "could not connect" with no indication why. Options: periodically re-print/re-announce the current IP, or move to mDNS/Bonjour-style discovery instead of a static printed address (bigger change, may overlap with the Remote Connectivity work below).
+
 ## Remote Connectivity (Cross-Network)
 
 Long-term feature area — requires `-k` mode only, local network operation unchanged.
