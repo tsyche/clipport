@@ -74,7 +74,7 @@ type client struct {
 	addr string
 }
 
-func main() {
+func main() { //nolint:gocyclo // flag parsing + dispatch; branch count is inherent to the CLI surface, not a complexity smell
 	var (
 		port        string
 		showVersion bool
@@ -155,8 +155,12 @@ func resolvePassword() []byte {
 		return []byte(v)
 	}
 	fmt.Print("Password for --secure: ")
-	pw, _ := term.ReadPassword(int(syscall.Stdin))
+	pw, err := term.ReadPassword(int(syscall.Stdin)) //nolint:unconvert // syscall.Stdin's underlying type differs across the cross-compiled GOOS targets; the cast is a no-op on linux but required elsewhere
 	fmt.Println()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error: could not read password:", err)
+		os.Exit(1)
+	}
 	return pw
 }
 
@@ -181,7 +185,10 @@ func resolveClientAddress(addr, port string) (string, error) {
 // for confirmation before continuing.
 func confirmPlaintext() bool {
 	fmt.Print("Warning: no encryption requested (-s or -k). Clipboard contents will be sent in plaintext. Continue? [y/N] ")
-	line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	if err != nil {
+		return false
+	}
 	line = strings.TrimSpace(strings.ToLower(line))
 	return line == "y" || line == "yes"
 }
@@ -416,8 +423,8 @@ func enableKeepAlive(c net.Conn) {
 	if !ok {
 		return
 	}
-	_ = tc.SetKeepAlive(true)
-	_ = tc.SetKeepAlivePeriod(30 * time.Second)
+	_ = tc.SetKeepAlive(true)                   //nolint:errcheck // best-effort; a failure here just means slower dead-peer detection, not a functional break
+	_ = tc.SetKeepAlivePeriod(30 * time.Second) //nolint:errcheck // best-effort, see above
 }
 
 // Handle a client as a server
@@ -465,7 +472,7 @@ func HandleClient(c net.Conn) {
 	mu.Unlock()
 	if noClients {
 		fmt.Println("All devices disconnected. Exiting.")
-		os.Exit(0)
+		os.Exit(0) //nolint:gocritic // c is already closed above; nothing left for the deferred Close to do
 	}
 }
 

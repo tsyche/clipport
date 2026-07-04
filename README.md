@@ -6,13 +6,13 @@ Now you can, Apple device or not!
 
 You don't even have to sign in like you need to on Apple devices.
 
-*Clipport is a fork of [quackduck/uniclip](https://github.com/quackduck/uniclip) with a pinnable listen port (`-p`/`--port`), automatic reconnect, and an optional per-device keypair (`-k`/`--key`) as an alternative to a shared password.*
+_Clipport is a fork of [quackduck/uniclip](https://github.com/quackduck/uniclip) with a pinnable listen port (`-p`/`--port`), automatic reconnect, and an optional per-device keypair (`-k`/`--key`) as an alternative to a shared password._
 
 ## Usage
 
 Run this to start a new clipboard:
 
- ```sh
+```sh
 clipport
 ```
 
@@ -50,7 +50,7 @@ Running just `clipport` will start a new clipboard.
 It will also provide an address with which you can connect to the same clipboard with another device.
 ```
 
-*Note: The devices have to be on the same local network (eg. connected to the same Wi-Fi) unless the device has a public IP with all ports routed to it. (use the public IP instead of what Clipport prints in this case)*
+> **Note:** The devices have to be on the same local network (eg. connected to the same Wi-Fi) unless the device has a public IP with all ports routed to it. (use the public IP instead of what Clipport prints in this case)
 
 ## Encryption
 
@@ -125,12 +125,12 @@ go build -o clipport .
 
 ## Uninstalling
 
-| Method | Command |
-|--------|---------|
-| Homebrew | `brew uninstall clipport` |
-| Nix | `nix profile remove clipport` |
-| Manual | Delete the `clipport` binary from wherever you placed it |
-| Termux | Delete `$PREFIX/usr/bin/clipport` |
+| Method   | Command                                                  |
+| -------- | -------------------------------------------------------- |
+| Homebrew | `brew uninstall clipport`                                |
+| Nix      | `nix profile remove clipport`                            |
+| Manual   | Delete the `clipport` binary from wherever you placed it |
+| Termux   | Delete `$PREFIX/usr/bin/clipport`                        |
 
 ## Contributing
 

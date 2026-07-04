@@ -23,7 +23,7 @@ Inferred from the codebase on 2026-06-16 (no prior ROADMAP.md existed); audited 
 Checked the upstream repository's open issues against this fork's actual code (not just assumed carried over):
 
 1. **Windows clipboard CRLF corruption**
-   `runGetClipCommand()` (clipport.go:649-650) only trims a *trailing* `\r\n` from PowerShell's `Get-Clipboard` output; internal `\r\n` line endings in multi-line text are left untouched.
+   `runGetClipCommand()` (clipport.go:649-650) only trims a _trailing_ `\r\n` from PowerShell's `Get-Clipboard` output; internal `\r\n` line endings in multi-line text are left untouched.
    Upstream [quackduck/uniclip#35](https://github.com/quackduck/uniclip/issues/35) reports a client receiving a second, `\r\n`-corrupted copy of multi-line content.
    Upstream has an unmerged fix ([PR #36](https://github.com/quackduck/uniclip/pull/36)) doing `strings.ReplaceAll(str, "\r\n", "\n")` before trimming — straightforward to port. ~30 min.
 2. **Wayland + xclip picks the wrong backend**
@@ -35,6 +35,7 @@ Checked the upstream repository's open issues against this fork's actual code (n
    Upstream: [quackduck/uniclip#23](https://github.com/quackduck/uniclip/issues/23). Fix: rate-limit/dedupe the error or warn once and skip until clipboard content type changes. ~1-2 hrs.
 
 Lower priority / not clearly actionable yet:
+
 - **"use of closed network connection" after Windows hibernation** ([quackduck/uniclip#32](https://github.com/quackduck/uniclip/issues/32)) — reporter couldn't reliably reproduce; revisit if it recurs for us.
 - Custom-port feature request ([quackduck/uniclip#20](https://github.com/quackduck/uniclip/issues/20)) is already done in this fork via `-p`/`--port`.
 
@@ -50,9 +51,11 @@ Lower priority / not clearly actionable yet:
 ## New Suggestions (2026-07-02)
 
 1. **Sleep/wake detection to speed up dead-peer recovery** — ~2-3 hours
-   - Both sides currently rely on TCP keepalive (30s period, several missed probes before the OS reports failure) to notice a peer that vanished during sleep — this can take minutes after wake before either side reacts. Detecting the local machine's own wake (e.g. macOS `NSWorkspace` sleep/wake notifications, or just noticing a large wall-clock gap between poll iterations) and immediately probing/closing stale connections instead of waiting out the full keepalive timeout would make recovery near-instant instead of "eventually."
+   - Both sides rely on TCP keepalive (30s period, several missed probes) to notice a vanished peer — this can take minutes after wake before either side reacts.
+   - Detecting the local machine's own wake (e.g. macOS `NSWorkspace` notifications, or a large wall-clock gap between poll iterations) and immediately probing/closing stale connections would make recovery near-instant instead of "eventually."
 2. **Server re-announces or survives an IP change after reassociation** — ~half day, needs design
-   - The connect string (`clipport <ip>:<port>`) is printed once at server startup. If the server machine's Wi-Fi reassociates after sleep and gets a new DHCP lease, that printed IP goes stale and clients get "could not connect" with no indication why. Options: periodically re-print/re-announce the current IP, or move to mDNS/Bonjour-style discovery instead of a static printed address (bigger change, may overlap with the Remote Connectivity work below).
+   - The connect string (`clipport <ip>:<port>`) is printed once at startup. If the server's Wi-Fi reassociates after sleep and gets a new DHCP lease, that printed IP goes stale and clients get "could not connect" with no indication why.
+   - Options: periodically re-announce the current IP, or move to mDNS/Bonjour-style discovery instead of a static printed address (may overlap with Remote Connectivity below).
 
 ## Remote Connectivity (Cross-Network)
 
@@ -62,7 +65,7 @@ Long-term feature area — requires `-k` mode only, local network operation unch
 
 Define a `Transport` interface so relay implementations can be swapped or chained without rewriting core logic. Fallback chains (try libp2p → fall back to relay) become trivial. Design this interface before building any specific transport.
 
-```
+```sh
 clipport --remote                          # use default transport
 clipport --remote --transport=relay        # explicit relay
 clipport --remote --transport=libp2p,relay # libp2p with relay fallback
@@ -81,6 +84,7 @@ Security constraint: remote mode must require `-k`; clear error message if attem
 4. **Waku signaling** — purpose-built decentralized messaging layer from the Ethereum/Status ecosystem. Privacy-preserving metadata design, censorship resistant. Similar role to Nostr but with stronger privacy guarantees and a growing dedicated relay network. ~3-5 days.
 
 ### Notes
+
 - No blockchain transaction layer (Bitcoin/Ethereum on-chain) — fees and latency make it a bad fit
 - Nostr and Waku relay networks are the right layer to piggyback on, not the chains themselves
 - Headscale (self-hosted Tailscale coordination server) is an option for users who want the Tailscale UX without the account dependency, but requires running a server — not meaningfully simpler than the relay approach
@@ -100,4 +104,4 @@ Security constraint: remote mode must require `-k`; clear error message if attem
 
 ## Notes
 
-- This roadmap was bootstrapped from `TODO` comments, recent git history, and reading `clipport.go` directly — there was no prior roadmap or stated long-term vision to preserve. Revisit priorities once real users/usage patterns emerge.
+- This roadmap was bootstrapped from `TODO` comments, recent Git history, and reading `clipport.go` directly — there was no prior roadmap or stated long-term vision to preserve. Revisit priorities once real users/usage patterns emerge.
