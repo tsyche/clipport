@@ -16,8 +16,8 @@ name: Lint Code Base
 #############################
 on:
   push:
-#     branches-ignore: [main]
-#     # Remove the line above to run when pushing to main
+  #     branches-ignore: [main]
+  #     # Remove the line above to run when pushing to main
   pull_request:
     branches: [main]
 
@@ -56,3 +56,4 @@ jobs:
           VALIDATE_ALL_CODEBASE: false
           DEFAULT_BRANCH: main
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          JSCPD_CONFIG_FILE: .jscpd.json
