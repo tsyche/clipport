@@ -12,7 +12,7 @@ Inferred from the codebase on 2026-06-16 (no prior ROADMAP.md existed); audited 
 
 ## Top 3 Suggested Tasks
 
-1. **Harden the wire protocol against oversized/malformed frames** — ~2-3 hours
+1. **Harden the wire protocol against oversized/malformed frames** — ~2-3 hours [in progress]
    - `gob.NewDecoder(r).Decode(...)` in `MonitorSentClips` (clipport.go:497) has no message-size cap — a malicious or buggy peer could send an unbounded payload; add a `io.LimitReader` or explicit max-size check before decoding
 2. **Root-cause the empty-clipboard workaround** — ~1-2 hours
    - `clipport.go:516` has a `// hacky way to prevent empty clipboard TODO: find out why empty cb happens` — currently just silently drops empty payloads instead of fixing the source
