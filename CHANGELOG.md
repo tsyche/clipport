@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Security
+
+- Wire protocol now caps clipboard frames at 8 MiB: oversized gob payloads
+  disconnect the peer instead of allocating unboundedly; send side rejects
+  frames over the limit before encoding
+
 ## [0.1.7] - 2026-07-02
 
 ### Fixed

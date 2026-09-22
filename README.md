@@ -1,5 +1,8 @@
 # Clipport - Universal Clipboard
 
+[![Test](https://github.com/tsyche/clipport/actions/workflows/test.yml/badge.svg)](https://github.com/tsyche/clipport/actions/workflows/test.yml)
+[![License: MIT](https://img.shields.io/github/license/tsyche/clipport)](LICENSE)
+
 Apple users, did you know you could copy from one device and paste on the other? Wouldn't it be awesome if you could do that for non-Apple devices too?
 
 Now you can, Apple device or not!

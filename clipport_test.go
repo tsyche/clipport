@@ -1,7 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
+	"encoding/gob"
+	"errors"
+	"strings"
 	"testing"
 )
 
@@ -111,5 +115,70 @@ func TestEncryptEmptyPlaintext(t *testing.T) {
 	}
 	if !bytes.Equal(got, []byte{}) {
 		t.Errorf("expected empty plaintext back, got %q", got)
+	}
+}
+
+func TestSendClipboardRejectsOversizedFrame(t *testing.T) {
+	oversized := strings.Repeat("a", maxClipboardFrameBytes+1)
+	var buf bytes.Buffer
+	w := bufio.NewWriter(&buf)
+
+	err := sendClipboard(w, oversized, nil)
+	if !errors.Is(err, errClipboardTooLarge) {
+		t.Fatalf("expected errClipboardTooLarge, got %v", err)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("expected no bytes written for oversized frame, got %d", buf.Len())
+	}
+}
+
+func TestSendClipboardAllowsMaxSizeFrame(t *testing.T) {
+	// Exact limit must still succeed (no gob overhead on raw []byte payload path
+	// is not guaranteed, so stay one byte under to avoid flaking on encoder overhead).
+	atLimit := strings.Repeat("a", maxClipboardFrameBytes-64)
+	var buf bytes.Buffer
+	w := bufio.NewWriter(&buf)
+
+	if err := sendClipboard(w, atLimit, nil); err != nil {
+		t.Fatalf("send at near-limit size: %v", err)
+	}
+	if err := w.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	if buf.Len() == 0 {
+		t.Fatal("expected bytes written")
+	}
+}
+
+func TestMonitorSentClipsRejectsOversizedFrame(t *testing.T) {
+	// Craft a single gob frame whose payload alone exceeds the cap.
+	payload := bytes.Repeat([]byte("x"), maxClipboardFrameBytes+1)
+	var frame bytes.Buffer
+	if err := gob.NewEncoder(&frame).Encode(payload); err != nil {
+		t.Fatalf("encode oversized frame: %v", err)
+	}
+
+	// No key: MonitorSentClips would only hit the frame cap path.
+	// EOF after the oversized frame must not be reached as clean shutdown.
+	r := bufio.NewReader(&frame)
+	clean := MonitorSentClips(r, nil)
+	if clean {
+		t.Fatal("expected oversized frame to disconnect uncleanly (false), got clean shutdown (true)")
+	}
+}
+
+func TestMonitorSentClipsValidFrameThenEOF(t *testing.T) {
+	var buf bytes.Buffer
+	w := bufio.NewWriter(&buf)
+	if err := gob.NewEncoder(w).Encode([]byte("ping")); err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	if err := w.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	clean := MonitorSentClips(bufio.NewReader(&buf), nil)
+	if !clean {
+		t.Fatal("expected true (clean EOF) after valid frame + EOF")
 	}
 }

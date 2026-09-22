@@ -66,6 +66,13 @@ Refer to https://github.com/tsyche/clipport for more information`
 	password       []byte
 )
 
+// maxClipboardFrameBytes caps a single gob-encoded clipboard frame on the
+// wire. Guards MonitorSentClips against a malicious or buggy peer sending
+// an unbounded payload and exhausting memory before decode finishes.
+const maxClipboardFrameBytes = 8 << 20 // 8 MiB
+
+var errClipboardTooLarge = errors.New("clipboard frame exceeds size limit")
+
 // client pairs a connected peer's writer with the encryption key negotiated
 // for that specific connection (nil if unencrypted).
 type client struct {
@@ -562,7 +569,17 @@ func MonitorSentClips(r *bufio.Reader, key []byte) bool {
 	var foreignClipboard string
 	var foreignClipboardBytes []byte
 	for {
-		err := gob.NewDecoder(r).Decode(&foreignClipboardBytes)
+		// Fresh LimitedReader per frame: caps bytes consumed from the shared
+		// stream so one oversized gob message cannot allocate unboundedly.
+		// N = max+1 allows a legal max-size frame to leave N >= 1 on success.
+		lr := &io.LimitedReader{R: r, N: maxClipboardFrameBytes + 1}
+		err := gob.NewDecoder(lr).Decode(&foreignClipboardBytes)
+		if lr.N <= 0 {
+			// Hit the cap mid-message (or frame was larger than max): stream
+			// is desynced and peer is misbehaving — disconnect, do not continue.
+			fmt.Fprintf(os.Stderr, "error: peer sent clipboard frame larger than %d bytes; disconnecting\n", maxClipboardFrameBytes)
+			return false
+		}
 		if err != nil {
 			if err == io.EOF {
 				return true // clean shutdown by server
@@ -630,6 +647,9 @@ func sendClipboard(w *bufio.Writer, clipboard string, key []byte) error {
 		if err != nil {
 			return err
 		}
+	}
+	if len(clipboardBytes) > maxClipboardFrameBytes {
+		return fmt.Errorf("%w: %d bytes (limit %d)", errClipboardTooLarge, len(clipboardBytes), maxClipboardFrameBytes)
 	}
 
 	err = gob.NewEncoder(w).Encode(clipboardBytes)
