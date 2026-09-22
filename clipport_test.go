@@ -170,7 +170,10 @@ func TestMonitorSentClipsRejectsOversizedFrame(t *testing.T) {
 func TestMonitorSentClipsValidFrameThenEOF(t *testing.T) {
 	var buf bytes.Buffer
 	w := bufio.NewWriter(&buf)
-	if err := gob.NewEncoder(w).Encode([]byte("ping")); err != nil {
+	// Empty payload: MonitorSentClips skips setLocalClip for empty clipboard,
+	// so this exercises decode + clean EOF without touching the system clipboard
+	// (setLocalClip os.Exit(2)s on headless CI with no xclip/xsel/wl-copy).
+	if err := gob.NewEncoder(w).Encode([]byte{}); err != nil {
 		t.Fatalf("encode: %v", err)
 	}
 	if err := w.Flush(); err != nil {
