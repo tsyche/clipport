@@ -3,12 +3,6 @@
 [![Test](https://github.com/tsyche/clipport/actions/workflows/test.yml/badge.svg)](https://github.com/tsyche/clipport/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/github/license/tsyche/clipport)](LICENSE)
 
-Apple users, did you know you could copy from one device and paste on the other? Wouldn't it be awesome if you could do that for non-Apple devices too?
-
-Now you can, Apple device or not!
-
-You don't even have to sign in like you need to on Apple devices.
-
 _Clipport is a fork of [quackduck/uniclip](https://github.com/quackduck/uniclip) with a pinnable listen port (`-p`/`--port`), automatic reconnect, and an optional per-device keypair (`-k`/`--key`) as an alternative to a shared password._
 
 ## Usage
