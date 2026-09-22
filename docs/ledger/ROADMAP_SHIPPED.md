@@ -33,6 +33,8 @@ Commit: `e146d65`.
 
 ### 2026-09-22 — Harden wire protocol against oversized/malformed frames
 
-`gob` decode in `MonitorSentClips` had no message-size cap — a malicious or buggy peer could send an unbounded payload. Added `maxClipboardFrameBytes` (8 MiB): per-frame `io.LimitedReader` on decode (disconnect on cap hit; stream desynced), send-side reject via `errClipboardTooLarge` before encode. Regression tests: oversized send rejected, oversized frame disconnects uncleanly, valid frame + EOF still clean.
+`gob` decode in `MonitorSentClips` had no message-size cap — a malicious or buggy peer could send an unbounded payload. Added `maxClipboardFrameBytes` (8 MiB): per-frame `io.LimitedReader` on decode (disconnect on cap hit; stream desynced), send-side reject via `errClipboardTooLarge` before encode.
+
+Regression tests: oversized send rejected, oversized frame disconnects uncleanly, valid frame + EOF still clean.
 
 Wire-protocol hardening item from ROADMAP Top 3; work started under commit `53c724c`, completed and tested 2026-09-22.

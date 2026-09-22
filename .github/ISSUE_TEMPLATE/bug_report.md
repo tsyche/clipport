@@ -1,22 +1,21 @@
 ---
 name: Bug report
 about: Create a report to help improve Clipport
-title: 'Bug: '
+title: "Bug: "
 labels: bug
-assignees: ''
-
+assignees: ""
 ---
 
 <!--You can remove parts which do not apply-->
 
-**Description of the bug**
+### Description of the bug
 
-**Verbose output (Use the `--debug` option)**
+### Verbose output (Use the `--debug` option)
 
-**Steps to Reproduce**
+### Steps to Reproduce
 
-**Expected behavior**
+### Expected behavior
 
-**OS and Clipport version**
+### OS and Clipport version
 
-**Additional info**
+### Additional info

@@ -53,6 +53,9 @@ jobs:
       - name: Lint Code Base
         uses: github/super-linter@v7
         env:
-          VALIDATE_ALL_CODEBASE: false
+          VALIDATE_ALL_CODEBASE: true
+          # super-linter@v7.1.0 ships goreleaser v2.2.0, which rejects `formats`
+          # (required by release.yml's goreleaser latest); config is validated on tag push instead.
+          VALIDATE_GO_RELEASER: false
           DEFAULT_BRANCH: main
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,18 +1,17 @@
 ---
 name: Feature request
 about: Suggest an idea for Clipport
-title: 'Feature: '
+title: "Feature: "
 labels: enhancement
-assignees: ''
-
+assignees: ""
 ---
 
 <!--You can remove parts which do not apply-->
 
-**Is your feature request related to a problem? If so, what is the problem?**
+### Is your feature request related to a problem? If so, what is the problem?
 
-**Describe the solution/feature you'd like**
+### Describe the solution/feature you'd like
 
-**Describe alternatives you've considered**
+### Describe alternatives you've considered
 
-**Additional info**
+### Additional info

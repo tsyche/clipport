@@ -36,7 +36,7 @@ archives:
         formats: [zip]
 
 checksum:
-  name_template: 'checksums.txt'
+  name_template: "checksums.txt"
 
 snapshot:
   version_template: "{{ .Tag }}-next"
@@ -45,16 +45,16 @@ changelog:
   sort: asc
   filters:
     exclude:
-      - '^docs:'
-      - '^test:'
+      - "^docs:"
+      - "^test:"
 
 brews:
   - repository:
       owner: tsyche
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
-    homepage: 'https://github.com/tsyche/clipport'
-    description: 'Cross-platform shared clipboard over TCP'
+    homepage: "https://github.com/tsyche/clipport"
+    description: "Cross-platform shared clipboard over TCP"
     install: |
       bin.install "clipport"
     test: |

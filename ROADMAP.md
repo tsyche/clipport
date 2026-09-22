@@ -87,9 +87,10 @@ Security constraint: remote mode must require `-k`; clear error message if attem
 ## Backlog
 
 - **AUR package (Arch/Manjaro)** — goreleaser v2 has native `aurs` support; requires an AUR account, an SSH keypair, and the private key added as a GitHub Actions secret (`AUR_SSH_PRIVATE_KEY`). ~30 min once prerequisites are in place. 🧑 needs-human: AUR account + SSH key registration
-- **Scoop bucket (Windows)** — goreleaser has native `scoops` support; create a `scoop-bucket` repository under `tsyche`, wire it up in `.goreleaser.yml` similarly to the Homebrew tap. ~20 min. 🧑 needs-human: create GitHub repo under account
+- **Scoop bucket (Windows)** — goreleaser has native `scoops` support; create a `scoop-bucket` repository under `tsyche`, wire it up in `.goreleaser.yml` similarly to the Homebrew tap. ~20 min. 🧑 needs-human: create GitHub repository under account
 - **Transport security for non-encrypted mode** — cleartext mode still has no authentication between peers; anyone who can reach the port can join the clipboard. The plaintext confirmation gate at least makes this an explicit, opt-in choice rather than a silent default — but the underlying gap (no auth) is unchanged.
-- **Test coverage for new networking/crypto code** — the 2026-06-23 changes (ECDH handshake, TOFU trust store, reconnect loop, keygen, CLI flag combining) shipped with no new tests; `clipport_test.go` was crypto-only until frame-cap tests landed 2026-09-22. Wire protocol (`sendClipboard`/`MonitorSentClips`/`MonitorLocalClip`) still largely uncovered. Deliberately deferred — revisit with a fresh `/audit-tests` run once ready. ~4-6 hours for happy-path coverage of both the new code and the pre-existing gap.
+- **Test coverage for new networking/crypto code** — the 2026-06-23 changes (ECDH handshake, TOFU trust store, reconnect loop, keygen, CLI flag combining) shipped with no new tests; `clipport_test.go` was crypto-only until frame-cap tests landed 2026-09-22.
+  Wire protocol (`sendClipboard`/`MonitorSentClips`/`MonitorLocalClip`) still largely uncovered. Deliberately deferred — revisit with a fresh `/audit-tests` run once ready. ~4-6 hours for happy-path coverage of both the new code and the pre-existing gap.
 - **`flake.nix` `vendorSha256` staleness check** — unverified against current `go.mod`/`go.sum` since the rebrand; likely fine but not confirmed.
 
 ## Notes
