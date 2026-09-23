@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `clipport known-hosts` subcommand: `list` (default) shows trusted `-k`
+  peers with fingerprints; `remove <peer>` deletes an entry so key rotation
+  no longer requires hand-editing `~/.clipport/known_peers`. The TOFU
+  mismatch warning now points at this command.
+- Client reconnect uses exponential backoff (3s → 30s cap) instead of a
+  fixed 3s loop. The delay resets after a successful session.
+- Permanent `-k` failures (local key mismatch, peer rejection) no longer
+  reconnect forever: `connectOnce` stops and prints a fix hint instead.
+- CI test job runs on a matrix of `ubuntu-latest`, `windows-latest`, and
+  `macos-latest` so platform-specific clipboard/normalization paths are
+  exercised on real runners.
 - Networking/crypto test suite covering TOFU peer trust, ECDH handshake,
   `HandleClient` cleanup, `connectOnce` dial/shutdown, `MonitorLocalClip`,
   `MonitorSentClips`, and `keygen`; `FuzzMonitorSentClips` seed corpus.

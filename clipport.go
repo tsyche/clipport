@@ -19,6 +19,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -38,6 +39,7 @@ With Clipport, you can copy from one device and paste on another.
 
 Usage: clipport [--port/-p] [--secure/-s] [--key/-k] [--debug/-d] [ <address> | --help/-h ]
        clipport keygen
+       clipport known-hosts [list|remove <peer>]
 Examples:
    clipport                                   # start a new clipboard with randomized port
    clipport -p 6666                           # start a new clipboard on a set port number
@@ -45,8 +47,10 @@ Examples:
    clipport 192.168.86.24:53701               # join the clipboard at 192.168.86.24:53701
    clipport 192.168.86.24 -p 53701            # same as above, host and port given separately
    clipport -d --secure 192.168.86.24:53701   # join the clipboard with debug output and enable encryption
-   clipport keygen                            # generate a clipport keypair for use with --key
-   clipport -k 192.168.86.24:53701            # join using keypair-based encryption instead of a password
+    clipport keygen                            # generate a clipport keypair for use with --key
+    clipport -k 192.168.86.24:53701            # join using keypair-based encryption instead of a password
+    clipport known-hosts                       # list trusted -k peers
+    clipport known-hosts remove 192.168.86.24:53701  # forget a peer (after key rotation)
 Running just ` + "`clipport`" + ` will start a new clipboard.
 It will also provide an address with which you can connect to the same clipboard with another device.
 With --secure, the password is read from the CLIPPORT_SECRET environment variable if set,
@@ -85,6 +89,25 @@ const maxClipboardFrameBytes = 8 << 20 // 8 MiB
 
 var errClipboardTooLarge = errors.New("clipboard frame exceeds size limit")
 
+// permanentError marks a failure that cannot succeed by retrying (e.g. a -k
+// peer key mismatch). ConnectToServer stops instead of looping forever.
+type permanentError struct{ err error }
+
+func (e *permanentError) Error() string { return e.err.Error() }
+func (e *permanentError) Unwrap() error { return e.err }
+
+func permanent(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &permanentError{err: err}
+}
+
+func isPermanent(err error) bool {
+	var p *permanentError
+	return errors.As(err, &p)
+}
+
 // client pairs a connected peer's writer with the encryption key negotiated
 // for that specific connection (nil if unencrypted).
 type client struct {
@@ -121,6 +144,13 @@ func main() { //nolint:gocyclo // flag parsing + dispatch; branch count is inher
 	args := flag.Args()
 	if len(args) == 1 && args[0] == "keygen" {
 		runKeygen()
+		return
+	}
+	if len(args) >= 1 && args[0] == "known-hosts" {
+		if err := runKnownHosts(args[1:]); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
 		return
 	}
 	if len(args) > 1 {
@@ -264,10 +294,10 @@ func resolveConnectionKey(c net.Conn, isServer bool, dialedAddress string) ([]by
 		return nil, err
 	}
 	if localErr != nil {
-		return nil, localErr
+		return nil, permanent(localErr)
 	}
 	if peerStatus[0] == 0 {
-		return nil, errors.New("peer rejected the connection (its key verification failed on its end)")
+		return nil, permanent(errors.New("peer rejected the connection (its key verification failed on its end)"))
 	}
 
 	return priv.ECDH(peerPub)
@@ -360,7 +390,8 @@ func verifyOrTrustPeer(peerID string, pubKey []byte) error {
 		if existing != encoded {
 			return fmt.Errorf("WARNING: public key for %s has changed since the last connection.\n"+
 				"This could mean someone is impersonating that peer, or it legitimately regenerated its key.\n"+
-				"If this is expected, remove the %q line from %s and reconnect", peerID, peerID, path)
+				"If this is expected, run `clipport known-hosts remove %s` and reconnect (or edit %s by hand)",
+				peerID, peerID, path)
 		}
 		return nil
 	}
@@ -400,6 +431,79 @@ func saveKnownPeers(path string, peers map[string]string) error {
 		fmt.Fprintf(&b, "%s %s\n", id, key)
 	}
 	return os.WriteFile(path, []byte(b.String()), 0600)
+}
+
+// removeKnownPeer deletes id from the known_peers file at path.
+func removeKnownPeer(path, id string) error {
+	peers, err := loadKnownPeers(path)
+	if err != nil {
+		return err
+	}
+	if _, ok := peers[id]; !ok {
+		return fmt.Errorf("no known peer %q in %s", id, path)
+	}
+	delete(peers, id)
+	return saveKnownPeers(path, peers)
+}
+
+// runKnownHosts implements `clipport known-hosts [list|remove <peer>]`.
+func runKnownHosts(args []string) error {
+	dir, err := clipportDir()
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(dir, "known_peers")
+	peersMu.Lock()
+	defer peersMu.Unlock()
+
+	cmd := "list"
+	if len(args) > 0 {
+		cmd = args[0]
+		args = args[1:]
+	}
+	switch cmd {
+	case "list":
+		if len(args) != 0 {
+			return errors.New("usage: clipport known-hosts [list|remove <peer>]")
+		}
+		return listKnownPeers(path)
+	case "remove":
+		if len(args) != 1 {
+			return errors.New("usage: clipport known-hosts remove <peer>")
+		}
+		if err := removeKnownPeer(path, args[0]); err != nil {
+			return err
+		}
+		fmt.Printf("Removed peer %s\n", args[0])
+		return nil
+	default:
+		return fmt.Errorf("unknown known-hosts command %q (want list or remove)", cmd)
+	}
+}
+
+func listKnownPeers(path string) error {
+	peers, err := loadKnownPeers(path)
+	if err != nil {
+		return err
+	}
+	if len(peers) == 0 {
+		fmt.Printf("No known peers in %s\n", path)
+		return nil
+	}
+	ids := make([]string, 0, len(peers))
+	for id := range peers {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		pub, err := base64.StdEncoding.DecodeString(peers[id])
+		if err != nil {
+			fmt.Printf("%s  (unreadable key)\n", id)
+			continue
+		}
+		fmt.Printf("%s  fingerprint %s\n", id, fingerprint(pub))
+	}
+	return nil
 }
 
 func fingerprint(pubKey []byte) string {
@@ -510,35 +614,63 @@ func HandleClient(c net.Conn) {
 // Connect to the server (which starts a new clipboard), reconnecting
 // automatically if the connection drops while the server is still up.
 func ConnectToServer(address string) {
+	const (
+		baseBackoff = 3 * time.Second
+		maxBackoff  = 30 * time.Second
+	)
+	backoff := baseBackoff
 	for {
-		if !connectOnce(address) {
+		retry, reached := connectOnce(address)
+		if !retry {
 			return
 		}
-		time.Sleep(3 * time.Second)
+		if reached {
+			// A successful session means the last failure mode is over —
+			// start the next outage at the short delay again.
+			backoff = baseBackoff
+		}
+		time.Sleep(backoff)
+		backoff = nextBackoff(backoff, maxBackoff)
 	}
 }
 
+// nextBackoff doubles cur, capped at max.
+func nextBackoff(cur, max time.Duration) time.Duration {
+	n := cur * 2
+	if n > max {
+		return max
+	}
+	return n
+}
+
 // connectOnce dials the server and runs the clipboard sync until either
-// direction of the connection fails, then returns true if the caller should
-// reconnect or false if it should give up (e.g. plaintext connection dropped).
-func connectOnce(address string) bool {
+// direction of the connection fails. Returns (retry, reached): retry is false
+// when the caller should give up (clean shutdown, plaintext drop, or a
+// permanent -k key mismatch); reached is true if a session was established
+// (used to reset reconnect backoff).
+func connectOnce(address string) (retry, reached bool) {
 	c, err := net.Dial("tcp4", address)
 	if c == nil {
 		handleError(err)
 		fmt.Println("Could not connect to", address)
-		return true
+		return true, false
 	}
 	if err != nil {
 		handleError(err)
-		return true
+		return true, false
 	}
 	enableKeepAlive(c)
 
 	key, err := resolveConnectionKey(c, false, address)
 	if err != nil {
-		handleError(err)
 		_ = c.Close()
-		return true
+		handleError(err)
+		if isPermanent(err) {
+			fmt.Println("Permanent failure; not reconnecting.")
+			fmt.Println("If you rotated this peer's key, run `clipport known-hosts remove <peer>` (see warning above), then try again.")
+			return false, false
+		}
+		return true, false
 	}
 	fmt.Printf("Connected to the clipboard at %s\n", address)
 
@@ -562,15 +694,15 @@ func connectOnce(address string) bool {
 
 	if cleanShutdown {
 		fmt.Printf("Server at %s shut down. Exiting.\n", address)
-		return false
+		return false, true
 	}
 	if key != nil {
 		fmt.Printf("Connection to %s lost. Reconnecting...\n", address)
-		return true
+		return true, true
 	}
 	fmt.Printf("Connection to %s lost (unencrypted). Reconnecting without encryption is unsafe.\n", address)
 	fmt.Println("Use -k or -s for secure reconnections. Exiting.")
-	return false
+	return false, true
 }
 
 // monitors for changes to the local clipboard and writes them to w.

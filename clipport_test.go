@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"encoding/base64"
 	"encoding/gob"
 	"errors"
 	"io"
@@ -212,6 +213,16 @@ func preserveGlobals(t *testing.T) {
 	})
 }
 
+// setTestHome points os.UserHomeDir at a fresh temp dir on unix and Windows
+// (HOME / USERPROFILE) so clipportDir never touches the real ~/.clipport.
+func setTestHome(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	return home
+}
+
 // stubClipboard points get/set at in-memory fakes so tests never shell out
 // (runGetClipCommand/runSetClipCommand os.Exit(2) on headless CI).
 func stubClipboard(t *testing.T, get func() string) *string {
@@ -305,7 +316,7 @@ func TestResolveConnectionKeyPasswordMode(t *testing.T) {
 
 func TestResolveConnectionKeyKeyModeHandshake(t *testing.T) {
 	preserveGlobals(t)
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t)
 	dir, err := clipportDir()
 	if err != nil {
 		t.Fatal(err)
@@ -360,7 +371,7 @@ func TestResolveConnectionKeyKeyModeHandshake(t *testing.T) {
 
 func TestVerifyOrTrustPeerTOFU(t *testing.T) {
 	preserveGlobals(t)
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t)
 
 	pub := bytes.Repeat([]byte{0x42}, 32)
 	if err := verifyOrTrustPeer("10.0.0.9:1234", pub); err != nil {
@@ -377,6 +388,9 @@ func TestVerifyOrTrustPeerTOFU(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "has changed") {
 		t.Errorf("error should mention key change, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "known-hosts remove") {
+		t.Errorf("mismatch error should point at known-hosts remove, got: %v", err)
 	}
 
 	// File must still hold the original (trusted) key, not the rejected one.
@@ -457,8 +471,7 @@ func TestGenerateKeypairAndLoad(t *testing.T) {
 	}
 
 	// loadKeypair via HOME
-	t.Setenv("HOME", filepath.Dir(dir)) // wrong layout — use clipportDir under temp home
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t)
 	homeDir, err := clipportDir()
 	if err != nil {
 		t.Fatal(err)
@@ -477,7 +490,7 @@ func TestGenerateKeypairAndLoad(t *testing.T) {
 
 func TestLoadKeypairMissing(t *testing.T) {
 	preserveGlobals(t)
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t)
 	_, err := loadKeypair()
 	if err == nil {
 		t.Fatal("expected error when no key exists")
@@ -807,8 +820,12 @@ func TestConnectOnceDialFailureReconnects(t *testing.T) {
 	dead := ln.Addr().String()
 	_ = ln.Close()
 
-	if !connectOnce(dead) {
-		t.Fatal("expected true (reconnect) when dial fails")
+	retry, reached := connectOnce(dead)
+	if !retry {
+		t.Fatal("expected retry when dial fails")
+	}
+	if reached {
+		t.Error("dial failure must not count as a reached session")
 	}
 }
 
@@ -832,12 +849,21 @@ func TestConnectOnceCleanServerShutdownExits(t *testing.T) {
 	}()
 
 	// MonitorSentClips should see EOF → cleanShutdown → return false (exit).
-	done := make(chan bool, 1)
-	go func() { done <- connectOnce(addr) }()
+	type result struct {
+		retry, reached bool
+	}
+	done := make(chan result, 1)
+	go func() {
+		r, reached := connectOnce(addr)
+		done <- result{r, reached}
+	}()
 	select {
-	case reconnect := <-done:
-		if reconnect {
-			t.Fatal("expected false (do not reconnect) after clean server shutdown")
+	case res := <-done:
+		if res.retry {
+			t.Fatal("expected no retry after clean server shutdown")
+		}
+		if !res.reached {
+			t.Error("session was established before shutdown; reached should be true")
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("connectOnce hung after clean server shutdown")
@@ -1018,6 +1044,135 @@ func FuzzMonitorSentClips(f *testing.F) {
 		}
 		monitorSentClipsNoHang(t, data)
 	})
+}
+
+func TestNextBackoff(t *testing.T) {
+	const max = 30 * time.Second
+	if got := nextBackoff(3*time.Second, max); got != 6*time.Second {
+		t.Errorf("3s→%v, want 6s", got)
+	}
+	if got := nextBackoff(20*time.Second, max); got != 30*time.Second {
+		t.Errorf("20s→%v, want 30s (cap)", got)
+	}
+	if got := nextBackoff(30*time.Second, max); got != 30*time.Second {
+		t.Errorf("30s→%v, want 30s (stay capped)", got)
+	}
+}
+
+func TestPermanentErrorClassification(t *testing.T) {
+	if permanent(nil) != nil {
+		t.Error("permanent(nil) should be nil")
+	}
+	err := permanent(errors.New("key changed"))
+	if !isPermanent(err) {
+		t.Error("wrapped error should be permanent")
+	}
+	if !strings.Contains(err.Error(), "key changed") {
+		t.Errorf("Error() = %q, want inner text", err.Error())
+	}
+	if isPermanent(errors.New("transient dial failure")) {
+		t.Error("plain error must not be permanent")
+	}
+	var target *permanentError
+	if !errors.As(err, &target) {
+		t.Error("errors.As should unwrap permanentError")
+	}
+}
+
+func TestRemoveKnownPeer(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "known_peers")
+	if err := saveKnownPeers(path, map[string]string{
+		"peer-a": "AAAA",
+		"peer-b": "BBBB",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeKnownPeer(path, "peer-a"); err != nil {
+		t.Fatalf("remove peer-a: %v", err)
+	}
+	peers, err := loadKnownPeers(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := peers["peer-a"]; ok {
+		t.Error("peer-a should be gone")
+	}
+	if peers["peer-b"] != "BBBB" {
+		t.Errorf("peer-b should remain, got %#v", peers)
+	}
+	if err := removeKnownPeer(path, "peer-a"); err == nil {
+		t.Error("removing missing peer should error")
+	}
+}
+
+func TestKeyHandshakeMismatchIsPermanent(t *testing.T) {
+	preserveGlobals(t)
+	setTestHome(t)
+	secure, keyMode = true, true
+
+	dir, err := clipportDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := generateKeypair(dir); err != nil {
+		t.Fatalf("generateKeypair: %v", err)
+	}
+
+	ln, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	addr := ln.Addr().String()
+
+	// Pre-trust the server host (peer IDs are host-only — SplitHostPort's
+	// first return) with the wrong public key so the client's
+	// verifyOrTrustPeer fails on this handshake.
+	dir2, err := clipportDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir2, "known_peers")
+	wrong := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x01}, 32))
+	if err := os.WriteFile(path, []byte(host+" "+wrong+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	serverErr := make(chan error, 1)
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		defer c.Close()
+		_, err = resolveConnectionKey(c, true, "")
+		serverErr <- err
+	}()
+
+	c, err := net.Dial("tcp4", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	_, clientErr := resolveConnectionKey(c, false, addr)
+	if clientErr == nil {
+		t.Fatal("client should fail key verification")
+	}
+	if !isPermanent(clientErr) {
+		t.Errorf("client mismatch must be permanent, got: %v", clientErr)
+	}
+	serr := <-serverErr
+	if serr == nil {
+		t.Fatal("server should see client reject")
+	}
+	if !isPermanent(serr) {
+		t.Errorf("server peer-reject must be permanent, got: %v", serr)
+	}
 }
 
 func monitorSentClipsNoHang(t *testing.T, data []byte) {

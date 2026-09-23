@@ -34,6 +34,7 @@ With Clipport, you can copy from one device and paste on another.
 
 Usage: clipport [--port/-p] [--secure/-s] [--key/-k] [--debug/-d] [ <address> | --help/-h ]
        clipport keygen
+       clipport known-hosts [list|remove <peer>]
 Examples:
    clipport                                   # start a new clipboard with randomized port
    clipport -p 6666                           # start a new clipboard on a set port number
@@ -43,6 +44,8 @@ Examples:
    clipport -d --secure 192.168.86.24:53701   # join the clipboard with debug output and enable encryption
    clipport keygen                            # generate a clipport keypair for use with --key
    clipport -k 192.168.86.24:53701            # join using keypair-based encryption instead of a password
+   clipport known-hosts                       # list trusted -k peers
+   clipport known-hosts remove 192.168.86.24:53701  # forget a peer (after key rotation)
 Running just `clipport` will start a new clipboard.
 It will also provide an address with which you can connect to the same clipboard with another device.
 ```
@@ -60,11 +63,15 @@ By default, clipport asks for confirmation before sending your clipboard in plai
   instead of `-s`. No secret ever has to be typed or shared — devices exchange public keys and
   derive a shared secret automatically. The first connection to a given peer trusts its public
   key and remembers it under `~/.clipport/known_peers`; if that peer's key ever changes later,
-  clipport aborts the connection with a warning instead of silently proceeding.
+  clipport aborts the connection with a warning instead of silently proceeding. Manage trusted
+  peers with `clipport known-hosts` (list) and `clipport known-hosts remove <peer>` (forget).
 
 Use one or the other, not both.
 
-Secure connections (`-k` or `-s`) reconnect automatically if the link drops. Plaintext connections exit on drop instead of reconnecting, to avoid silently re-admitting an unverifiable peer.
+Secure connections (`-k` or `-s`) reconnect automatically if the link drops (with exponential
+backoff, 3s up to 30s). A permanent `-k` key mismatch does not retry — fix it with
+`clipport known-hosts remove <peer>` and reconnect. Plaintext connections exit on drop instead
+of reconnecting, to avoid silently re-admitting an unverifiable peer.
 
 The server exits automatically once every connected device has disconnected (or on Ctrl+C, which also tells connected clients to exit instead of trying to reconnect).
 
