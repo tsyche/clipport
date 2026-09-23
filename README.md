@@ -32,7 +32,7 @@ You can even have multiple devices joined to the same clipboard (just run that s
 Clipport - Universal Clipboard
 With Clipport, you can copy from one device and paste on another.
 
-Usage: clipport [--port/-p] [--secure/-s] [--key/-k] [--debug/-d] [--quiet/-q] [ <address> | --help/-h ]
+Usage: clipport [--port/-p] [--secure/-s] [--key/-k] [--debug/-d] [--quiet/-q] [--max-clients N] [ <address> | --help/-h ]
        clipport keygen
        clipport known-hosts [list|remove <peer>]
        clipport status
@@ -53,7 +53,7 @@ Running just `clipport` will start a new clipboard.
 It will also provide an address with which you can connect to the same clipboard with another device.
 ```
 
-State (keys, `known_peers`) lives in `~/.clipport` by default; set `CLIPPORT_DIR` or pass `--dir` to use another directory (containers, CI, multiple profiles). Pass `--quiet`/`-q` to suppress status lines when running headless (errors and prompts still print).
+State (keys, `known_peers`) lives in `~/.clipport` by default; set `CLIPPORT_DIR` or pass `--dir` to use another directory (containers, CI, multiple profiles). Pass `--quiet`/`-q` to suppress status lines when running headless (errors and prompts still print). The server accepts at most `--max-clients` peers (default 8, `0` = unlimited); extras are rejected.
 
 > **Note:** The devices have to be on the same local network (eg. connected to the same Wi-Fi) unless the device has a public IP with all ports routed to it. (use the public IP instead of what Clipport prints in this case)
 

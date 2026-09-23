@@ -38,7 +38,7 @@ var (
 	helpMsg                           = `Clipport - Universal Clipboard
 With Clipport, you can copy from one device and paste on another.
 
-Usage: clipport [--port/-p] [--secure/-s] [--key/-k] [--debug/-d] [--quiet/-q] [ <address> | --help/-h ]
+Usage: clipport [--port/-p] [--secure/-s] [--key/-k] [--debug/-d] [--quiet/-q] [--max-clients N] [ <address> | --help/-h ]
        clipport keygen
        clipport known-hosts [list|remove <peer>]
        clipport status
@@ -65,6 +65,7 @@ remembers it under ~/.clipport/known_peers, warning loudly if that peer's key ev
 Connecting without --secure or --key will prompt for confirmation since the clipboard is sent in plaintext.
 State (keys, known_peers) lives in ~/.clipport; override with the CLIPPORT_DIR env var or --dir.
 With --quiet/-q, status chatter is suppressed (errors and interactive prompts still print) — suited to launchd/systemd.
+--max-clients N caps how many peers the server accepts at once (default 8, 0 = unlimited); extras are rejected and logged.
 Refer to https://github.com/tsyche/clipport for more information`
 	mu             sync.Mutex
 	peersMu        sync.Mutex // guards read-modify-write of known_peers
@@ -72,6 +73,12 @@ Refer to https://github.com/tsyche/clipport for more information`
 	localClipboard string
 	printDebugInfo = false
 	quiet          = false
+	// maxClients caps concurrent server connections (0 = unlimited); counts
+	// pending handshakes too via activeConns, not just listed clients.
+	maxClients = 8
+	// activeConns counts accepted-but-not-yet-finished connections (slot
+	// accounting for --max-clients). Guarded by mu.
+	activeConns    = 0
 	version        = "dev"
 	cryptoStrength = 16384
 	secure         = false
@@ -144,6 +151,7 @@ func main() { //nolint:gocyclo // flag parsing + dispatch; branch count is inher
 	flag.BoolVar(&printDebugInfo, "debug", false, "Enable debug output")
 	flag.BoolVar(&quiet, "q", false, "Quiet mode: print errors and prompts only (for headless/launchd use)")
 	flag.BoolVar(&quiet, "quiet", false, "Quiet mode: print errors and prompts only (for headless/launchd use)")
+	flag.IntVar(&maxClients, "max-clients", 8, "Max concurrent clients on the server (0 = unlimited)")
 	flag.BoolVar(&showVersion, "v", false, "Print version")
 	flag.BoolVar(&showVersion, "version", false, "Print version")
 	flag.Usage = func() { fmt.Println(helpMsg) }
@@ -183,6 +191,11 @@ func main() { //nolint:gocyclo // flag parsing + dispatch; branch count is inher
 			fmt.Fprintln(os.Stderr, "error: invalid port number:", port)
 			os.Exit(1)
 		}
+	}
+
+	if maxClients < 0 {
+		fmt.Fprintln(os.Stderr, "error: --max-clients must be >= 0 (0 = unlimited)")
+		os.Exit(1)
 	}
 
 	if secure && keyMode {
@@ -551,6 +564,7 @@ type statusSnapshot struct {
 	Pid          int      `json:"pid"`
 	Port         string   `json:"port"`
 	Clients      []string `json:"clients"`
+	MaxClients   int      `json:"max_clients"`    // 0 = unlimited
 	LastClipPush int64    `json:"last_clip_push"` // unix nanos; 0 = never
 }
 
@@ -568,11 +582,13 @@ func currentStatus(port string) statusSnapshot {
 			clients = append(clients, c.addr)
 		}
 	}
+	max := maxClients
 	mu.Unlock()
 	return statusSnapshot{
 		Pid:          os.Getpid(),
 		Port:         port,
 		Clients:      clients,
+		MaxClients:   max,
 		LastClipPush: lastClipPush.Load(),
 	}
 }
@@ -649,6 +665,11 @@ func runStatus() {
 	fmt.Printf("clipport server running (pid %d, port %s)\n", st.Pid, st.Port)
 	if len(st.Clients) == 0 {
 		fmt.Println("Clients (0): none connected")
+	} else if st.MaxClients > 0 {
+		fmt.Printf("Clients (%d/%d):\n", len(st.Clients), st.MaxClients)
+		for _, addr := range st.Clients {
+			fmt.Printf("  %s\n", addr)
+		}
 	} else {
 		fmt.Printf("Clients (%d):\n", len(st.Clients))
 		for _, addr := range st.Clients {
@@ -661,6 +682,25 @@ func runStatus() {
 		ago := time.Since(time.Unix(0, st.LastClipPush)).Round(time.Second)
 		fmt.Printf("Clipboard last pushed: %s ago\n", ago)
 	}
+}
+
+// tryReserveClientSlot accounts one more accepted connection against
+// --max-clients, returning false when the server is full (maxClients 0 =
+// unlimited). Pairs with releaseClientSlot when the connection finishes.
+func tryReserveClientSlot() bool {
+	mu.Lock()
+	defer mu.Unlock()
+	if maxClients > 0 && activeConns >= maxClients {
+		return false
+	}
+	activeConns++
+	return true
+}
+
+func releaseClientSlot() {
+	mu.Lock()
+	activeConns--
+	mu.Unlock()
 }
 
 func makeServer(port string) {
@@ -694,9 +734,17 @@ func makeServer(port string) {
 			handleError(err)
 			return
 		}
+		if !tryReserveClientSlot() {
+			infof("Rejecting %s: server full (--max-clients %d)\n", c.RemoteAddr(), maxClients)
+			_ = c.Close()
+			continue
+		}
 		enableKeepAlive(c)
 		info("Connected to device at " + c.RemoteAddr().String())
-		go HandleClient(c)
+		go func() {
+			defer releaseClientSlot()
+			HandleClient(c)
+		}()
 	}
 }
 

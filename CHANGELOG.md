@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `--max-clients N`: caps concurrent server connections (default 8,
+  0 = unlimited). Overflow peers are closed with a server-side log
+  line; pending handshakes count against the cap too. `clipport
+  status` shows the limit as `Clients (n/max)`.
 - State-directory override: keys and `known_peers` live in `~/.clipport`
   unless `CLIPPORT_DIR` is set or `--dir` is passed (flag wins over env,
   env over default). Helps containers, CI, and multi-profile setups.

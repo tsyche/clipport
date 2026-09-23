@@ -209,6 +209,7 @@ func preserveGlobals(t *testing.T) {
 	oldStateDir := stateDir
 	oldQuiet, oldDebug := quiet, printDebugInfo
 	oldClipPush := lastClipPush.Load()
+	oldMaxClients, oldActive := maxClients, activeConns
 	t.Cleanup(func() {
 		secure, keyMode = oldSecure, oldKeyMode
 		password = oldPassword
@@ -219,6 +220,7 @@ func preserveGlobals(t *testing.T) {
 		stateDir = oldStateDir
 		quiet, printDebugInfo = oldQuiet, oldDebug
 		lastClipPush.Store(oldClipPush)
+		maxClients, activeConns = oldMaxClients, oldActive
 	})
 }
 
@@ -398,6 +400,7 @@ func TestCurrentStatusSnapshot(t *testing.T) {
 	preserveGlobals(t)
 	mu.Lock()
 	listOfClients = []*client{{addr: "10.0.0.1:1111"}, nil, {addr: "[::1]:2222"}}
+	maxClients = 8
 	mu.Unlock()
 	lastClipPush.Store(1234567890)
 
@@ -412,8 +415,36 @@ func TestCurrentStatusSnapshot(t *testing.T) {
 	if len(st.Clients) != len(want) || st.Clients[0] != want[0] || st.Clients[1] != want[1] {
 		t.Errorf("clients = %v, want %v (nil entries skipped)", st.Clients, want)
 	}
+	if st.MaxClients != 8 {
+		t.Errorf("maxClients = %d, want 8", st.MaxClients)
+	}
 	if st.LastClipPush != 1234567890 {
 		t.Errorf("lastClipPush = %d", st.LastClipPush)
+	}
+}
+
+func TestTryReserveClientSlotEnforcesCap(t *testing.T) {
+	preserveGlobals(t)
+	maxClients, activeConns = 2, 0
+	if !tryReserveClientSlot() || !tryReserveClientSlot() {
+		t.Fatal("first two reservations should succeed")
+	}
+	if tryReserveClientSlot() {
+		t.Error("third reservation should fail at cap 2")
+	}
+	releaseClientSlot()
+	if !tryReserveClientSlot() {
+		t.Error("slot should free after releaseClientSlot")
+	}
+}
+
+func TestTryReserveClientSlotUnlimitedWhenZero(t *testing.T) {
+	preserveGlobals(t)
+	maxClients, activeConns = 0, 0
+	for i := 0; i < 50; i++ {
+		if !tryReserveClientSlot() {
+			t.Fatalf("maxClients=0 must be unlimited; failed at %d", i)
+		}
 	}
 }
 
