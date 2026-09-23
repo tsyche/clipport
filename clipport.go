@@ -862,6 +862,7 @@ func linuxClipboardCommand(get bool) (*exec.Cmd, error) {
 	}
 	for _, t := range tools {
 		if _, err := exec.LookPath(t.name); err == nil {
+			// #nosec G204 -- t.name is from the fixed allowlist above, not user input
 			return exec.Command(t.name, t.args...), nil
 		}
 	}
