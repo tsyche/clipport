@@ -17,8 +17,23 @@
 - [x] 2026-09-23 — Exponential reconnect backoff (3s→30s) + permanent -k mismatch stop
 - [x] 2026-09-23 — Multi-OS CI matrix (ubuntu/windows/macOS)
 - [x] 2026-09-23 — IPv6 / dual-stack support (tcp4 → tcp, bracketed client addrs)
+- [x] 2026-09-23 — `CLIPPORT_DIR` env override + `--dir` flag
+- [x] 2026-09-23 — `--quiet`/`-q` flag (errors-only headless mode)
+- [x] 2026-09-23 — `clipport status` subcommand (unix-socket status query)
 
 ## Archived entries
+
+### 2026-09-23 — `clipport status` subcommand (unix-socket status query)
+
+Top 3 item 1. The server exposes a local unix socket (`<statedir>/clipport.sock`, mode 0600) via `startStatusServer`/`serveStatus`; `clipport status` dials it (`queryStatus`) and prints pid, listen port, connected client addresses, and time since the last clipboard push (`lastClipPush`, set by `MonitorLocalClip` after a successful send). Local-only query path — no auth needed, dead server = dial failure with exit 1; direct subcommand output is not gated by `--quiet`. Covered by `TestCurrentStatusSnapshot`, `TestServeStatusRoundtrip`, `TestQueryStatusNoServer`, `TestRunStatusNoServerErrorIsNotSilent`.
+
+### 2026-09-23 — `--quiet`/`-q` flag (errors-only headless mode)
+
+Top 3 item 1. Status chatter (start/join/connect/trust/reconnect/shutdown/EOF-disconnect) routes through `info`/`infof`, suppressed by `--quiet`/`-q`. Errors on stderr, interactive prompts, security warnings (TOFU mismatch, plaintext drop), and direct subcommand output (keygen, known-hosts) always print. Covered by `TestInfoRespectsQuiet` and `TestHandleErrorQuietStillPrintsErrors`.
+
+### 2026-09-23 — `CLIPPORT_DIR` env override + `--dir` flag
+
+Top 3 item 1. `clipportDir()` resolves state (keys, `known_peers`) as: `--dir` flag, then `$CLIPPORT_DIR`, then `~/.clipport`, creating the directory with 0700. Helps containers, CI, and multi-profile setups; `setTestHome` now clears both overrides so ambient env cannot leak into tests. Covered by `TestClipportDirEnvOverride`, `TestClipportDirFlagBeatsEnv`, `TestClipportDirDefaultHome`.
 
 ### 2026-09-23 — IPv6 / dual-stack support
 

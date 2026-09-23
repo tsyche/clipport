@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- State-directory override: keys and `known_peers` live in `~/.clipport`
+  unless `CLIPPORT_DIR` is set or `--dir` is passed (flag wins over env,
+  env over default). Helps containers, CI, and multi-profile setups.
+- `--quiet`/`-q`: suppresses status chatter (connect/trust/reconnect/
+  shutdown lines) for headless launchd/systemd use. Errors on stderr,
+  interactive prompts, and security warnings still print.
+- `clipport status`: reports the running server's pid, port, connected
+  clients, and when a clipboard frame was last pushed. Served over a
+  unix socket in the state directory (`clipport.sock`, mode 0600) —
+  local-only query path, no auth needed, exits 1 when no server runs.
 - `clipport known-hosts` subcommand: `list` (default) shows trusted `-k`
   peers with fingerprints; `remove <peer>` deletes an entry so key rotation
   no longer requires hand-editing `~/.clipport/known_peers`. The TOFU

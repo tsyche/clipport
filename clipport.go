@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/gob"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -37,9 +38,10 @@ var (
 	helpMsg                           = `Clipport - Universal Clipboard
 With Clipport, you can copy from one device and paste on another.
 
-Usage: clipport [--port/-p] [--secure/-s] [--key/-k] [--debug/-d] [ <address> | --help/-h ]
+Usage: clipport [--port/-p] [--secure/-s] [--key/-k] [--debug/-d] [--quiet/-q] [ <address> | --help/-h ]
        clipport keygen
        clipport known-hosts [list|remove <peer>]
+       clipport status
 Examples:
    clipport                                   # start a new clipboard with randomized port
    clipport -p 6666                           # start a new clipboard on a set port number
@@ -52,6 +54,7 @@ Examples:
     clipport -k 192.168.86.24:53701            # join using keypair-based encryption instead of a password
     clipport known-hosts                       # list trusted -k peers
     clipport known-hosts remove 192.168.86.24  # forget a peer (after key rotation; peer IDs are host-only)
+    clipport status                           # list connected clients of the running server
 Running just ` + "`clipport`" + ` will start a new clipboard.
 It will also provide an address with which you can connect to the same clipboard with another device.
 With --secure, the password is read from the CLIPPORT_SECRET environment variable if set,
@@ -60,17 +63,24 @@ With --key, each device uses its own keypair (run ` + "`clipport keygen`" + ` on
 secret ever has to be typed or shared; the first connection to a given peer trusts its public key and
 remembers it under ~/.clipport/known_peers, warning loudly if that peer's key ever changes later.
 Connecting without --secure or --key will prompt for confirmation since the clipboard is sent in plaintext.
+State (keys, known_peers) lives in ~/.clipport; override with the CLIPPORT_DIR env var or --dir.
+With --quiet/-q, status chatter is suppressed (errors and interactive prompts still print) — suited to launchd/systemd.
 Refer to https://github.com/tsyche/clipport for more information`
 	mu             sync.Mutex
 	peersMu        sync.Mutex // guards read-modify-write of known_peers
 	listOfClients  = make([]*client, 0)
 	localClipboard string
 	printDebugInfo = false
+	quiet          = false
 	version        = "dev"
 	cryptoStrength = 16384
 	secure         = false
 	keyMode        = false
 	password       []byte
+
+	// stateDir overrides where keys/known_peers live (--dir flag; empty means
+	// fall back to $CLIPPORT_DIR, then ~/.clipport — see clipportDir).
+	stateDir = ""
 
 	// Clipboard access is routed through vars so tests can stub the system
 	// clipboard without depending on pbpaste/xclip being present or writable.
@@ -125,12 +135,15 @@ func main() { //nolint:gocyclo // flag parsing + dispatch; branch count is inher
 
 	flag.StringVar(&port, "p", "", "Specify the port to listen on")
 	flag.StringVar(&port, "port", "", "Specify the port to listen on")
+	flag.StringVar(&stateDir, "dir", "", "State directory for keys and known_peers (default ~/.clipport; also CLIPPORT_DIR)")
 	flag.BoolVar(&secure, "s", false, "Encrypt your data using a shared password")
 	flag.BoolVar(&secure, "secure", false, "Encrypt your data using a shared password")
 	flag.BoolVar(&keyMode, "k", false, "Encrypt your data using a clipport keypair (see `clipport keygen`)")
 	flag.BoolVar(&keyMode, "key", false, "Encrypt your data using a clipport keypair (see `clipport keygen`)")
 	flag.BoolVar(&printDebugInfo, "d", false, "Enable debug output")
 	flag.BoolVar(&printDebugInfo, "debug", false, "Enable debug output")
+	flag.BoolVar(&quiet, "q", false, "Quiet mode: print errors and prompts only (for headless/launchd use)")
+	flag.BoolVar(&quiet, "quiet", false, "Quiet mode: print errors and prompts only (for headless/launchd use)")
 	flag.BoolVar(&showVersion, "v", false, "Print version")
 	flag.BoolVar(&showVersion, "version", false, "Print version")
 	flag.Usage = func() { fmt.Println(helpMsg) }
@@ -152,6 +165,10 @@ func main() { //nolint:gocyclo // flag parsing + dispatch; branch count is inher
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
+		return
+	}
+	if len(args) == 1 && args[0] == "status" {
+		runStatus()
 		return
 	}
 	if len(args) > 1 {
@@ -309,13 +326,20 @@ func resolveConnectionKey(c net.Conn, isServer bool, dialedAddress string) ([]by
 	return priv.ECDH(peerPub)
 }
 
-// clipportDir returns ~/.clipport, creating it if necessary.
+// clipportDir returns the state directory (keys, known_peers): --dir if given,
+// else $CLIPPORT_DIR, else ~/.clipport. Created if necessary.
 func clipportDir() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
+	dir := stateDir
+	if dir == "" {
+		dir = os.Getenv("CLIPPORT_DIR")
 	}
-	dir := filepath.Join(home, ".clipport")
+	if dir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		dir = filepath.Join(home, ".clipport")
+	}
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return "", err
 	}
@@ -323,7 +347,7 @@ func clipportDir() (string, error) {
 }
 
 // runKeygen generates a new X25519 keypair for --key mode and stores it
-// under ~/.clipport, refusing to overwrite an existing key.
+// in the state directory (clipportDir), refusing to overwrite an existing key.
 func runKeygen() {
 	dir, err := clipportDir()
 	if err != nil {
@@ -517,8 +541,130 @@ func fingerprint(pubKey []byte) string {
 	return base64.StdEncoding.EncodeToString(sum[:])
 }
 
+// lastClipPush records when MonitorLocalClip last pushed a non-empty clipboard
+// frame to a peer (unix nanos; 0 = never). Reported by `clipport status`.
+var lastClipPush atomic.Int64
+
+// statusSnapshot is the JSON payload `clipport status` reads from the local
+// status socket. Clients holds connected peers' remote addresses.
+type statusSnapshot struct {
+	Pid          int      `json:"pid"`
+	Port         string   `json:"port"`
+	Clients      []string `json:"clients"`
+	LastClipPush int64    `json:"last_clip_push"` // unix nanos; 0 = never
+}
+
+func statusSocketPath(dir string) string {
+	return filepath.Join(dir, "clipport.sock")
+}
+
+// currentStatus builds a snapshot of live server state under the same mutex
+// that guards listOfClients.
+func currentStatus(port string) statusSnapshot {
+	mu.Lock()
+	clients := make([]string, 0, len(listOfClients))
+	for _, c := range listOfClients {
+		if c != nil {
+			clients = append(clients, c.addr)
+		}
+	}
+	mu.Unlock()
+	return statusSnapshot{
+		Pid:          os.Getpid(),
+		Port:         port,
+		Clients:      clients,
+		LastClipPush: lastClipPush.Load(),
+	}
+}
+
+// serveStatus writes a status JSON line to every connection on l, then closes
+// it. Runs until the listener fails (process exit closes it implicitly).
+func serveStatus(l net.Listener, port string) {
+	for {
+		c, err := l.Accept()
+		if err != nil {
+			return
+		}
+		data, err := json.Marshal(currentStatus(port))
+		if err == nil {
+			_, _ = c.Write(append(data, '\n'))
+		}
+		_ = c.Close()
+	}
+}
+
+// startStatusServer opens the local unix-socket status endpoint in the state
+// directory. Best-effort: if the platform or directory cannot support it, the
+// server runs without `clipport status`. A stale socket from a crashed server
+// is unlinked first; if two servers share a state dir, the newer one owns it.
+func startStatusServer(port string) {
+	dir, err := clipportDir()
+	if err != nil {
+		debug("status socket: no state dir:", err)
+		return
+	}
+	sock := statusSocketPath(dir)
+	_ = os.Remove(sock)
+	l, err := net.Listen("unix", sock)
+	if err != nil {
+		debug("status socket unavailable:", err)
+		return
+	}
+	_ = os.Chmod(sock, 0600)
+	go serveStatus(l, port)
+}
+
+// queryStatus dials the local status socket and reads one status line.
+func queryStatus(dir string) (statusSnapshot, error) {
+	conn, err := net.Dial("unix", statusSocketPath(dir))
+	if err != nil {
+		return statusSnapshot{}, fmt.Errorf("no running clipport server (status socket %s): %w", statusSocketPath(dir), err)
+	}
+	defer conn.Close()
+	line, err := bufio.NewReader(conn).ReadBytes('\n')
+	if err != nil {
+		return statusSnapshot{}, fmt.Errorf("reading status: %w", err)
+	}
+	var st statusSnapshot
+	if err := json.Unmarshal(line, &st); err != nil {
+		return statusSnapshot{}, fmt.Errorf("decoding status: %w", err)
+	}
+	return st, nil
+}
+
+// runStatus implements `clipport status`: report the running server's pid,
+// port, connected clients, and last clipboard push. Always prints (direct
+// subcommand output, not gated by --quiet); exits 1 when no server answers.
+func runStatus() {
+	dir, err := clipportDir()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(1)
+	}
+	st, err := queryStatus(dir)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(1)
+	}
+	fmt.Printf("clipport server running (pid %d, port %s)\n", st.Pid, st.Port)
+	if len(st.Clients) == 0 {
+		fmt.Println("Clients (0): none connected")
+	} else {
+		fmt.Printf("Clients (%d):\n", len(st.Clients))
+		for _, addr := range st.Clients {
+			fmt.Printf("  %s\n", addr)
+		}
+	}
+	if st.LastClipPush == 0 {
+		fmt.Println("Clipboard last pushed: never")
+	} else {
+		ago := time.Since(time.Unix(0, st.LastClipPush)).Round(time.Second)
+		fmt.Printf("Clipboard last pushed: %s ago\n", ago)
+	}
+}
+
 func makeServer(port string) {
-	fmt.Println("Starting a new clipboard")
+	info("Starting a new clipboard")
 	listenAddr := ":"
 	if port != "" {
 		listenAddr = ":" + port
@@ -532,15 +678,16 @@ func makeServer(port string) {
 	if port == "" {
 		port = strconv.Itoa(l.Addr().(*net.TCPAddr).Port)
 	}
+	startStatusServer(port)
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigs
-		fmt.Println("\nShutting down — connected devices will be notified.")
+		info("\nShutting down — connected devices will be notified.")
 		os.Exit(0)
 	}()
-	fmt.Println("Run", "`clipport", net.JoinHostPort(getOutboundIP().String(), port)+"`", "to join this clipboard")
-	fmt.Println()
+	info("Run", "`clipport", net.JoinHostPort(getOutboundIP().String(), port)+"`", "to join this clipboard")
+	info()
 	for {
 		c, err := l.Accept()
 		if err != nil {
@@ -548,7 +695,7 @@ func makeServer(port string) {
 			return
 		}
 		enableKeepAlive(c)
-		fmt.Println("Connected to device at " + c.RemoteAddr().String())
+		info("Connected to device at " + c.RemoteAddr().String())
 		go HandleClient(c)
 	}
 }
@@ -600,7 +747,7 @@ func HandleClient(c net.Conn) {
 	_ = c.Close() // unblock whichever goroutine is still running
 	<-finished    // both monitors must exit before we touch shared state / return
 
-	fmt.Println("Lost connection from", addr)
+	info("Lost connection from", addr)
 	mu.Lock()
 	newClients := make([]*client, 0, len(listOfClients))
 	for _, existing := range listOfClients {
@@ -612,7 +759,7 @@ func HandleClient(c net.Conn) {
 	noClients := len(listOfClients) == 0
 	mu.Unlock()
 	if noClients {
-		fmt.Println("All devices disconnected. Exiting.")
+		info("All devices disconnected. Exiting.")
 		os.Exit(0) //nolint:gocritic // c is already closed above; nothing left for the deferred Close to do
 	}
 }
@@ -658,7 +805,7 @@ func connectOnce(address string) (retry, reached bool) {
 	c, err := net.Dial("tcp", address) // dual-stack: resolver tries IPv6 and IPv4 addresses
 	if c == nil {
 		handleError(err)
-		fmt.Println("Could not connect to", address)
+		info("Could not connect to", address)
 		return true, false
 	}
 	if err != nil {
@@ -678,7 +825,7 @@ func connectOnce(address string) (retry, reached bool) {
 		}
 		return true, false
 	}
-	fmt.Printf("Connected to the clipboard at %s\n", address)
+	infof("Connected to the clipboard at %s\n", address)
 
 	cleanShutdown := false
 	done := make(chan struct{})
@@ -699,11 +846,11 @@ func connectOnce(address string) (retry, reached bool) {
 	<-done
 
 	if cleanShutdown {
-		fmt.Printf("Server at %s shut down. Exiting.\n", address)
+		infof("Server at %s shut down. Exiting.\n", address)
 		return false, true
 	}
 	if key != nil {
-		fmt.Printf("Connection to %s lost. Reconnecting...\n", address)
+		infof("Connection to %s lost. Reconnecting...\n", address)
 		return true, true
 	}
 	fmt.Printf("Connection to %s lost (unencrypted). Reconnecting without encryption is unsafe.\n", address)
@@ -739,6 +886,7 @@ func MonitorLocalClip(w *bufio.Writer, key []byte, stop <-chan struct{}) {
 				}
 				return
 			}
+			lastClipPush.Store(time.Now().UnixNano())
 		}
 		for {
 			select {
@@ -1071,7 +1219,7 @@ func getOutboundIP() net.IP {
 
 func handleError(err error) {
 	if err == io.EOF {
-		fmt.Println("Disconnected")
+		info("Disconnected")
 	} else {
 		fmt.Fprintln(os.Stderr, "error: ["+err.Error()+"]")
 	}
@@ -1088,5 +1236,20 @@ func isNetworkDisconnect(err error) bool {
 func debug(a ...interface{}) {
 	if printDebugInfo {
 		fmt.Println("verbose:", a)
+	}
+}
+
+// info/infof print status chatter unless --quiet is set. Errors (handleError →
+// stderr), interactive prompts, security warnings, and direct subcommand output
+// (keygen, known-hosts) never route through these — they always print.
+func info(a ...interface{}) {
+	if !quiet {
+		fmt.Println(a...)
+	}
+}
+
+func infof(format string, a ...interface{}) {
+	if !quiet {
+		fmt.Printf(format, a...)
 	}
 }

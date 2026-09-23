@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/gob"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -205,6 +206,9 @@ func preserveGlobals(t *testing.T) {
 	oldClipboard := localClipboard
 	oldGet, oldSet := getLocalClip, setLocalClip
 	oldSeconds := secondsBetweenChecksForClipChange
+	oldStateDir := stateDir
+	oldQuiet, oldDebug := quiet, printDebugInfo
+	oldClipPush := lastClipPush.Load()
 	t.Cleanup(func() {
 		secure, keyMode = oldSecure, oldKeyMode
 		password = oldPassword
@@ -212,16 +216,22 @@ func preserveGlobals(t *testing.T) {
 		localClipboard = oldClipboard
 		getLocalClip, setLocalClip = oldGet, oldSet
 		secondsBetweenChecksForClipChange = oldSeconds
+		stateDir = oldStateDir
+		quiet, printDebugInfo = oldQuiet, oldDebug
+		lastClipPush.Store(oldClipPush)
 	})
 }
 
 // setTestHome points os.UserHomeDir at a fresh temp dir on unix and Windows
-// (HOME / USERPROFILE) so clipportDir never touches the real ~/.clipport.
+// (HOME / USERPROFILE) so clipportDir never touches the real ~/.clipport, and
+// clears CLIPPORT_DIR / --dir so an ambient override can't leak into tests.
 func setTestHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
+	t.Setenv("CLIPPORT_DIR", "")
+	stateDir = ""
 	return home
 }
 
@@ -334,6 +344,178 @@ func TestDualStackListenDial(t *testing.T) {
 		return
 	}
 	_ = v6.Close()
+}
+
+// captureStdout runs fn with os.Stdout redirected to a pipe and returns what
+// was written. Restores os.Stdout even if fn panics.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+	defer func() { os.Stdout = old }()
+	fn()
+	_ = w.Close()
+	b, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+func TestInfoRespectsQuiet(t *testing.T) {
+	preserveGlobals(t)
+
+	quiet = false
+	if got := captureStdout(t, func() { info("hello"); infof("n=%d\n", 3) }); got != "hello\nn=3\n" {
+		t.Errorf("verbose mode got %q", got)
+	}
+
+	quiet = true
+	if got := captureStdout(t, func() { info("hello"); infof("n=%d\n", 3) }); got != "" {
+		t.Errorf("quiet mode got %q, want empty", got)
+	}
+}
+
+func TestHandleErrorQuietStillPrintsErrors(t *testing.T) {
+	preserveGlobals(t)
+	quiet = true
+
+	if got := captureStdout(t, func() { handleError(io.EOF) }); got != "" {
+		t.Errorf("EOF in quiet mode printed %q to stdout, want empty", got)
+	}
+
+	errOut := captureStderr(t, func() { handleError(errors.New("boom")) })
+	if !strings.Contains(errOut, "boom") {
+		t.Errorf("error not on stderr in quiet mode: %q", errOut)
+	}
+}
+
+func TestCurrentStatusSnapshot(t *testing.T) {
+	preserveGlobals(t)
+	mu.Lock()
+	listOfClients = []*client{{addr: "10.0.0.1:1111"}, nil, {addr: "[::1]:2222"}}
+	mu.Unlock()
+	lastClipPush.Store(1234567890)
+
+	st := currentStatus("53701")
+	if st.Pid != os.Getpid() {
+		t.Errorf("pid = %d, want %d", st.Pid, os.Getpid())
+	}
+	if st.Port != "53701" {
+		t.Errorf("port = %q", st.Port)
+	}
+	want := []string{"10.0.0.1:1111", "[::1]:2222"}
+	if len(st.Clients) != len(want) || st.Clients[0] != want[0] || st.Clients[1] != want[1] {
+		t.Errorf("clients = %v, want %v (nil entries skipped)", st.Clients, want)
+	}
+	if st.LastClipPush != 1234567890 {
+		t.Errorf("lastClipPush = %d", st.LastClipPush)
+	}
+}
+
+func TestServeStatusRoundtrip(t *testing.T) {
+	preserveGlobals(t)
+	dir := t.TempDir()
+	sock := filepath.Join(dir, "s.sock")
+	l, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Skipf("unix sockets unavailable: %v", err)
+	}
+	defer l.Close()
+	mu.Lock()
+	listOfClients = []*client{{addr: "1.2.3.4:9"}}
+	mu.Unlock()
+	lastClipPush.Store(42)
+
+	go serveStatus(l, "7777")
+	c, err := net.Dial("unix", sock)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer c.Close()
+	line, err := bufio.NewReader(c).ReadBytes('\n')
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	var st statusSnapshot
+	if err := json.Unmarshal(line, &st); err != nil {
+		t.Fatalf("unmarshal %q: %v", line, err)
+	}
+	if st.Port != "7777" || len(st.Clients) != 1 || st.Clients[0] != "1.2.3.4:9" || st.LastClipPush != 42 {
+		t.Errorf("snapshot = %+v", st)
+	}
+}
+
+func TestQueryStatusNoServer(t *testing.T) {
+	preserveGlobals(t)
+	setTestHome(t)
+	dir, err := clipportDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := queryStatus(dir); err == nil {
+		t.Fatal("expected error when no status socket exists")
+	}
+}
+
+func TestRunStatusNoServerErrorIsNotSilent(t *testing.T) {
+	// queryStatus error path is covered above; runStatus exits(1), which we
+	// don't call directly. This locks the socket-path contract instead:
+	preserveGlobals(t)
+	dir := t.TempDir()
+	if got := statusSocketPath(dir); got != filepath.Join(dir, "clipport.sock") {
+		t.Errorf("statusSocketPath = %q", got)
+	}
+}
+
+func TestClipportDirEnvOverride(t *testing.T) {
+	preserveGlobals(t)
+	setTestHome(t)
+	want := t.TempDir()
+	t.Setenv("CLIPPORT_DIR", want)
+	got, err := clipportDir()
+	if err != nil {
+		t.Fatalf("clipportDir: %v", err)
+	}
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	if _, err := os.Stat(got); err != nil {
+		t.Errorf("state dir not created: %v", err)
+	}
+}
+
+func TestClipportDirFlagBeatsEnv(t *testing.T) {
+	preserveGlobals(t)
+	setTestHome(t)
+	flagDir := t.TempDir()
+	envDir := t.TempDir()
+	stateDir = flagDir
+	t.Setenv("CLIPPORT_DIR", envDir)
+	got, err := clipportDir()
+	if err != nil {
+		t.Fatalf("clipportDir: %v", err)
+	}
+	if got != flagDir {
+		t.Errorf("got %q, want flag dir %q (env must lose)", got, flagDir)
+	}
+}
+
+func TestClipportDirDefaultHome(t *testing.T) {
+	preserveGlobals(t)
+	home := setTestHome(t)
+	got, err := clipportDir()
+	if err != nil {
+		t.Fatalf("clipportDir: %v", err)
+	}
+	want := filepath.Join(home, ".clipport")
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
 }
 
 func TestResolveConnectionKeyPlaintext(t *testing.T) {

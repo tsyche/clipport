@@ -32,9 +32,10 @@ You can even have multiple devices joined to the same clipboard (just run that s
 Clipport - Universal Clipboard
 With Clipport, you can copy from one device and paste on another.
 
-Usage: clipport [--port/-p] [--secure/-s] [--key/-k] [--debug/-d] [ <address> | --help/-h ]
+Usage: clipport [--port/-p] [--secure/-s] [--key/-k] [--debug/-d] [--quiet/-q] [ <address> | --help/-h ]
        clipport keygen
        clipport known-hosts [list|remove <peer>]
+       clipport status
 Examples:
    clipport                                   # start a new clipboard with randomized port
    clipport -p 6666                           # start a new clipboard on a set port number
@@ -43,13 +44,16 @@ Examples:
    clipport 192.168.86.24 -p 53701            # same as above, host and port given separately
    clipport [fe80::1]:53701                   # join via IPv6 (bracketed form; bare ::1 -p 53701 also works)
    clipport -d --secure 192.168.86.24:53701   # join the clipboard with debug output and enable encryption
-   clipport keygen                            # generate a clipport keypair for use with --key
-   clipport -k 192.168.86.24:53701            # join using keypair-based encryption instead of a password
-   clipport known-hosts                       # list trusted -k peers
-   clipport known-hosts remove 192.168.86.24  # forget a peer (after key rotation; peer IDs are host-only)
+    clipport keygen                            # generate a clipport keypair for use with --key
+    clipport -k 192.168.86.24:53701            # join using keypair-based encryption instead of a password
+    clipport known-hosts                       # list trusted -k peers
+    clipport known-hosts remove 192.168.86.24  # forget a peer (after key rotation; peer IDs are host-only)
+    clipport status                           # list connected clients of the running server
 Running just `clipport` will start a new clipboard.
 It will also provide an address with which you can connect to the same clipboard with another device.
 ```
+
+State (keys, `known_peers`) lives in `~/.clipport` by default; set `CLIPPORT_DIR` or pass `--dir` to use another directory (containers, CI, multiple profiles). Pass `--quiet`/`-q` to suppress status lines when running headless (errors and prompts still print).
 
 > **Note:** The devices have to be on the same local network (eg. connected to the same Wi-Fi) unless the device has a public IP with all ports routed to it. (use the public IP instead of what Clipport prints in this case)
 
