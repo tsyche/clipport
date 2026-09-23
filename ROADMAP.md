@@ -4,12 +4,13 @@ Inferred from the codebase on 2026-06-16 (no prior ROADMAP.md existed); audited 
 
 ## Top 3 Suggested Tasks
 
-1. **CLI security model section** — ~1 hour
-   - Plaintext vs `-s` (scrypt password) vs `-k` (X25519 TOFU) have scattered explanations across install docs and CLI prompts. A single "Security model" section spelling out the threat each mode addresses (and what plaintext does _not_ protect) would set expectations before someone pastes secrets over a LAN.
-2. **Sleep/wake detection to speed up dead-peer recovery** — ~2-3 hours
+1. **Sleep/wake detection to speed up dead-peer recovery** — ~2-3 hours
    - Both sides rely on TCP keepalive (30s period, several missed probes) to notice a vanished peer — this can take minutes after wake before either side reacts. Detecting the local machine's own wake (e.g. macOS `NSWorkspace` notifications, or a large wall-clock gap between poll iterations) and immediately probing/closing stale connections would make recovery near-instant instead of "eventually."
-3. **Wire fuzz run into CI** — ~1 hour
+2. **Wire fuzz run into CI** — ~1 hour
    - `FuzzMonitorSentClips` seed corpus exists but CI only runs the seed (`go test` without `-fuzz`). A short `-fuzz` job (e.g. 60s per PR) would catch decode regressions the static corpus misses.
+3. **Image/binary clipboard support** — ~1 day
+   - Text-only by design today: non-text content (e.g. macOS `pbpaste` on an image) returns `""` and never reaches peers; wire frames are `string`-oriented. Upstream users have asked for image paste (uniclip#23 comment thread); extension needs a wire-format change (length-prefixed bytes or type-tagged frames) and platform-native read/write for PNG/JPEG (and possibly files).
+   - 🧑 needs-human: scope decision — images only, images+files, or full multi-format MIME
 
 ## Inherited from upstream (quackduck/uniclip) — triaged 2026-06-16
 
@@ -25,12 +26,6 @@ Lower priority / not clearly actionable yet:
 1. **Server re-announces or survives an IP change after reassociation** — ~half day, needs design
    - The connect string (`clipport <ip>:<port>`) is printed once at startup. If the server's Wi-Fi reassociates after sleep and gets a new DHCP lease, that printed IP goes stale and clients get "could not connect" with no indication why.
    - Options: periodically re-announce the current IP, or move to mDNS/Bonjour-style discovery instead of a static printed address (may overlap with Remote Connectivity below).
-
-## New Suggestions (2026-09-23) — approved
-
-1. **Image/binary clipboard support** — ~1 day
-   - Text-only by design today: non-text content (e.g. macOS `pbpaste` on an image) returns `""` and never reaches peers; wire frames are `string`-oriented. Upstream users have asked for image paste (uniclip#23 comment thread); extension needs a wire-format change (length-prefixed bytes or type-tagged frames) and platform-native read/write for PNG/JPEG (and possibly files).
-   - 🧑 needs-human: scope decision — images only, images+files, or full multi-format MIME
 
 ## Remote Connectivity (Cross-Network)
 
@@ -87,3 +82,4 @@ Security constraint: remote mode must require `-k`; clear error message if attem
 - 2026-09-23: shipped `clipport status` subcommand (Top 3 #1, unix-socket query path). New Top 3: max-clients, debounce, CLI security-model docs (promoted from 2026-09-23 suggestions).
 - 2026-09-23: shipped max-clients cap (Top 3 #1, `--max-clients` default 8 / 0=unlimited, pending-handshake slot accounting). New Top 3: debounce, CLI security-model docs, sleep/wake recovery (promoted from 2026-07-02 suggestions). No new suggestions (2026-09-23 batch already approved).
 - 2026-09-23: shipped clipboard debounce (Top 3 #1, 250ms quiet window in `waitClipboardQuiet`; startup snapshot unsent-delayed). New Top 3: CLI security-model docs, sleep/wake recovery, fuzz CI wiring (promoted from 2026-09-22 suggestions). No new suggestions.
+- 2026-09-23: shipped CLI security model section (Top 3 #1, README `## Security model` threat coverage; docs-only). New Top 3: sleep/wake recovery, fuzz CI wiring, image clipboard 🧑 needs-human scope decision (promoted from 2026-09-23 suggestions — Top 3 not fully blocked: first two agent-doable). No new suggestions.
