@@ -806,9 +806,18 @@ func runGetClipCommand() string {
 		return "An error occurred while getting the local clipboard"
 	}
 	if runtime.GOOS == "windows" {
-		return strings.TrimSuffix(string(out), "\r\n") // powershell's get-clipboard adds a windows newline to the end for some reason
+		return normalizeWindowsClip(string(out))
 	}
 	return string(out)
+}
+
+// normalizeWindowsClip converts PowerShell Get-Clipboard output to LF-only
+// text. Get-Clipboard rewrites every LF as CRLF and appends a trailing CRLF;
+// leaving internal CRLFs intact corrupted multi-line pastes on peers
+// (uniclip#35 / uniclip#36).
+func normalizeWindowsClip(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	return strings.TrimSuffix(s, "\n")
 }
 
 func runSetClipCommand(s string) {

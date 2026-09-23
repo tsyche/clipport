@@ -10,6 +10,7 @@
 - [x] 2026-09-22 — Harden wire protocol against oversized/malformed frames
 - [x] 2026-09-22 — Networking/crypto test coverage (TOFU, handshake, monitors, fuzz seed)
 - [x] 2026-09-22 — Root-cause empty-clipboard workaround (sender no longer emits empty frames)
+- [x] 2026-09-23 — Windows CRLF normalization on clipboard reads (uniclip#36)
 
 ## Archived entries
 
@@ -59,3 +60,9 @@ Includes `FuzzMonitorSentClips` seed corpus (fuzz-item suggestion largely satisf
 Top 3 item 2. The `// hacky way to prevent empty clipboard TODO` dated to upstream `7daedea` (2022). Empty frames were produced because `MonitorLocalClip` always sent `getLocalClip()`, which returns `""` when the clipboard is cleared, at startup, or when the OS has no text type (macOS `pbpaste` on an image/file). Applying that would wipe the peer.
 
 Fix: `MonitorLocalClip` no longer puts empty frames on the wire; `MonitorSentClips` still drops empty payloads from older peers. Intentional clear and non-text content remain non-propagating (text-only by design). Tests: empty not sent; empty→non-empty still sends; receive-side skip retained.
+
+### 2026-09-23 — Windows CRLF normalization on clipboard reads
+
+Top 3 item 1. Port of upstream [uniclip#36](https://github.com/quackduck/uniclip/pull/36) for [uniclip#35](https://github.com/quackduck/uniclip/issues/35): PowerShell `Get-Clipboard` rewrites every LF as CRLF and appends a trailing CRLF; `runGetClipCommand` only trimmed the trailing sequence, so internal CRLFs corrupted multi-line text on receiving peers.
+
+Fix: extracted pure `normalizeWindowsClip` — `strings.ReplaceAll(s, "\r\n", "\n")` then trim one trailing `\n` — called on the Windows read path. Unit tests cover trailing CRLF, internal CRLF, LF-only input, lone CR, idempotence.

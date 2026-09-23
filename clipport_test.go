@@ -844,6 +844,38 @@ func TestConnectOnceCleanServerShutdownExits(t *testing.T) {
 	}
 }
 
+func TestNormalizeWindowsClip(t *testing.T) {
+	cases := []struct {
+		name, in, want string
+	}{
+		{"empty", "", ""},
+		{"single line trailing CRLF", "hello\r\n", "hello"},
+		{"internal CRLF preserved as LF", "line1\r\nline2\r\n", "line1\nline2"},
+		{"multi-line no trailing", "a\r\nb\r\nc", "a\nb\nc"},
+		{"already LF untouched", "a\nb\n", "a\nb"},
+		{"lone CR untouched", "a\rb", "a\rb"},
+		{"powershell double trailing", "hello\r\n\r\n", "hello\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := normalizeWindowsClip(tc.in); got != tc.want {
+				t.Errorf("normalizeWindowsClip(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestNormalizeWindowsClipIdempotent(t *testing.T) {
+	in := "alpha\r\nbeta\r\ngamma\r\n"
+	once := normalizeWindowsClip(in)
+	if twice := normalizeWindowsClip(once); twice != once {
+		t.Errorf("not idempotent: first %q, second %q", once, twice)
+	}
+	if strings.Contains(once, "\r") {
+		t.Errorf("result still contains CR: %q", once)
+	}
+}
+
 func FuzzMonitorSentClips(f *testing.F) {
 	f.Add([]byte{})
 	f.Add(encodeFrameForFuzz([]byte("ok")))

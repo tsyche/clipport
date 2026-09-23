@@ -4,23 +4,21 @@ Inferred from the codebase on 2026-06-16 (no prior ROADMAP.md existed); audited 
 
 ## Top 3 Suggested Tasks
 
-1. **Windows clipboard CRLF corruption** — ~30 min
-   - `runGetClipCommand()` only trims a trailing `\r\n`; internal `\r\n` in multi-line text is left untouched. Port upstream [uniclip#36](https://github.com/quackduck/uniclip/pull/36) `strings.ReplaceAll(str, "\r\n", "\n")` before trimming. Quick win with a clear fix.
-2. **Endless error spam on non-text clipboard content** — ~1-2 hrs (promoted; see Inherited #3)
+1. **Endless error spam on non-text clipboard content** — ~1-2 hrs (promoted; see Inherited #3)
    - `runGetClipCommand` `handleError`s every poll when the clipboard has no readable text (related to the empty-cb work just shipped); rate-limit/dedupe or warn once.
-3. **Wayland + xclip picks the wrong backend** — ~1 hr (promoted; see Inherited #2)
+2. **Wayland + xclip picks the wrong backend** — ~1 hr (promoted; see Inherited #2)
    - Prefer `$WAYLAND_DISPLAY` + `wl-paste`/`wl-copy` before falling back to `xclip`.
 
 ## Inherited from upstream (quackduck/uniclip) — triaged 2026-06-16
 
 Checked the upstream repository's open issues against this fork's actual code (not just assumed carried over):
 
-1. **Windows clipboard CRLF corruption** — see Top 3 item 1. Upstream [uniclip#35](https://github.com/quackduck/uniclip/issues/35).
-2. **Wayland + xclip picks the wrong backend** — promoted to Top 3 item 3
+1. **Windows clipboard CRLF corruption** — shipped 2026-09-23; see `docs/ledger/ROADMAP_SHIPPED.md`. Upstream [uniclip#35](https://github.com/quackduck/uniclip/issues/35) / [uniclip#36](https://github.com/quackduck/uniclip/pull/36).
+2. **Wayland + xclip picks the wrong backend** — promoted to Top 3 item 2
    `runGetClipCommand`/`setLocalClip` check `xclip` before `wl-paste`/`wl-copy`.
    On a Wayland session that happens to have `xclip` installed, clipport silently fails with `exit status 1` instead of using the Wayland-native tool.
    Upstream: [uniclip#26](https://github.com/quackduck/uniclip/issues/26). Fix: check `$WAYLAND_DISPLAY` first and prefer `wl-paste`/`wl-copy` when set. ~1 hr.
-3. **Endless error spam on non-text clipboard content** — promoted to Top 3 item 2
+3. **Endless error spam on non-text clipboard content** — promoted to Top 3 item 1
    When the system clipboard holds something `pbpaste`/`xclip`/etc. can't read as text (e.g. an image), `runGetClipCommand` calls `handleError` and returns a sentinel string every poll cycle, forever, with no backoff or one-time warning.
    Upstream: [uniclip#23](https://github.com/quackduck/uniclip/issues/23). Fix: rate-limit/dedupe the error or warn once and skip until clipboard content type changes. ~1-2 hrs.
 
@@ -98,3 +96,4 @@ Security constraint: remote mode must require `-k`; clear error message if attem
 - 2026-09-22 audit: shipped wire-protocol frame cap (Top 3 item 1); demoted Windows CRLF to new Top 3 #1 as lowest-effort high-impact fix; added fuzz-item suggestion (approved).
 - 2026-09-22: shipped test-coverage item (Top 3 #3); fixed multi-frame gob decode bug found by tests; promoted Wayland backend order to new Top 3 #3; empty-cb line number refreshed (`clipport.go:646`).
 - 2026-09-22: shipped empty-clipboard root-cause (Top 3 #2): empty frames no longer emitted from `MonitorLocalClip`; receive-side drop kept as backstop for older peers; TODO removed.
+- 2026-09-23: shipped Windows CRLF normalization (Top 3 #1, port of uniclip#36): `normalizeWindowsClip` maps all `\r\n` → `\n` then trims the trailing newline; Top 3 now lists error-spam (#1) and Wayland backend order (#2).

@@ -15,6 +15,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Windows clipboard reads no longer corrupt multi-line text: PowerShell
+  `Get-Clipboard` rewrites every LF as CRLF and appends a trailing CRLF; only
+  the trailing sequence was trimmed before, so internal CRLFs reached peers
+  (uniclip#35 / uniclip#36). All CRLFs are now normalized to LF before the
+  trailing newline is stripped.
 - Empty-clipboard workaround root-caused and tightened: `getLocalClip` returns
   `""` for a cleared clipboard, at startup, and when the OS clipboard has no
   text type (e.g. macOS `pbpaste` on an image). `MonitorLocalClip` no longer
