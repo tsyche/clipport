@@ -6,21 +6,21 @@ Inferred from the codebase on 2026-06-16 (no prior ROADMAP.md existed); audited 
 
 1. **Windows clipboard CRLF corruption** — ~30 min
    - `runGetClipCommand()` only trims a trailing `\r\n`; internal `\r\n` in multi-line text is left untouched. Port upstream [uniclip#36](https://github.com/quackduck/uniclip/pull/36) `strings.ReplaceAll(str, "\r\n", "\n")` before trimming. Quick win with a clear fix.
-2. **Root-cause the empty-clipboard workaround** — ~1-2 hours
-   - `clipport.go:604` has a `// hacky way to prevent empty clipboard TODO: find out why empty cb happens` — currently just silently drops empty payloads instead of fixing the source.
-3. **Test coverage for new networking/crypto code** — ~4-6 hours
-   - CI gates PRs now; wire protocol still mostly 0% coverage (frame-cap tests added 2026-09-22 are a start). See Backlog for full context. Deliberately still deferred per project notes — pick up when ready.
+2. **Endless error spam on non-text clipboard content** — ~1-2 hrs (promoted; see Inherited #3)
+   - `runGetClipCommand` `handleError`s every poll when the clipboard has no readable text (related to the empty-cb work just shipped); rate-limit/dedupe or warn once.
+3. **Wayland + xclip picks the wrong backend** — ~1 hr (promoted; see Inherited #2)
+   - Prefer `$WAYLAND_DISPLAY` + `wl-paste`/`wl-copy` before falling back to `xclip`.
 
 ## Inherited from upstream (quackduck/uniclip) — triaged 2026-06-16
 
 Checked the upstream repository's open issues against this fork's actual code (not just assumed carried over):
 
 1. **Windows clipboard CRLF corruption** — see Top 3 item 1. Upstream [uniclip#35](https://github.com/quackduck/uniclip/issues/35).
-2. **Wayland + xclip picks the wrong backend**
+2. **Wayland + xclip picks the wrong backend** — promoted to Top 3 item 3
    `runGetClipCommand`/`setLocalClip` check `xclip` before `wl-paste`/`wl-copy`.
    On a Wayland session that happens to have `xclip` installed, clipport silently fails with `exit status 1` instead of using the Wayland-native tool.
    Upstream: [uniclip#26](https://github.com/quackduck/uniclip/issues/26). Fix: check `$WAYLAND_DISPLAY` first and prefer `wl-paste`/`wl-copy` when set. ~1 hr.
-3. **Endless error spam on non-text clipboard content**
+3. **Endless error spam on non-text clipboard content** — promoted to Top 3 item 2
    When the system clipboard holds something `pbpaste`/`xclip`/etc. can't read as text (e.g. an image), `runGetClipCommand` calls `handleError` and returns a sentinel string every poll cycle, forever, with no backoff or one-time warning.
    Upstream: [uniclip#23](https://github.com/quackduck/uniclip/issues/23). Fix: rate-limit/dedupe the error or warn once and skip until clipboard content type changes. ~1-2 hrs.
 
@@ -49,8 +49,8 @@ Lower priority / not clearly actionable yet:
 
 ## New Suggestions (2026-09-22)
 
-1. **Fuzz wire decode path** — ~1 hour
-   - Frame-size cap landed 2026-09-22 with unit tests; Go native fuzzing on `MonitorSentClips`/`sendClipboard` would probe malformed gob framing and boundary sizes the fixed tests don't enumerate. CI can run short fuzz seeds on PRs.
+1. **Fuzz wire decode path** — ~1 hour — largely done
+   - `FuzzMonitorSentClips` seed corpus landed with the 2026-09-22 test-coverage push; optional follow-up is wiring a short `go test -fuzz` run into CI.
 
 ## Remote Connectivity (Cross-Network)
 
@@ -89,11 +89,12 @@ Security constraint: remote mode must require `-k`; clear error message if attem
 - **AUR package (Arch/Manjaro)** — goreleaser v2 has native `aurs` support; requires an AUR account, an SSH keypair, and the private key added as a GitHub Actions secret (`AUR_SSH_PRIVATE_KEY`). ~30 min once prerequisites are in place. 🧑 needs-human: AUR account + SSH key registration
 - **Scoop bucket (Windows)** — goreleaser has native `scoops` support; create a `scoop-bucket` repository under `tsyche`, wire it up in `.goreleaser.yml` similarly to the Homebrew tap. ~20 min. 🧑 needs-human: create GitHub repository under account
 - **Transport security for non-encrypted mode** — cleartext mode still has no authentication between peers; anyone who can reach the port can join the clipboard. The plaintext confirmation gate at least makes this an explicit, opt-in choice rather than a silent default — but the underlying gap (no auth) is unchanged.
-- **Test coverage for new networking/crypto code** — the 2026-06-23 changes (ECDH handshake, TOFU trust store, reconnect loop, keygen, CLI flag combining) shipped with no new tests; `clipport_test.go` was crypto-only until frame-cap tests landed 2026-09-22.
-  Wire protocol (`sendClipboard`/`MonitorSentClips`/`MonitorLocalClip`) still largely uncovered. Deliberately deferred — revisit with a fresh `/audit-tests` run once ready. ~4-6 hours for happy-path coverage of both the new code and the pre-existing gap.
+- **Test coverage for new networking/crypto code** — shipped 2026-09-22 (Top 3 item 3); see `docs/ledger/ROADMAP_SHIPPED.md`.
 - **`flake.nix` `vendorSha256` staleness check** — unverified against current `go.mod`/`go.sum` since the rebrand; likely fine but not confirmed.
 
 ## Notes
 
 - This roadmap was bootstrapped from `TODO` comments, recent Git history, and reading `clipport.go` directly — there was no prior roadmap or stated long-term vision to preserve. Revisit priorities once real users/usage patterns emerge.
 - 2026-09-22 audit: shipped wire-protocol frame cap (Top 3 item 1); demoted Windows CRLF to new Top 3 #1 as lowest-effort high-impact fix; added fuzz-item suggestion (approved).
+- 2026-09-22: shipped test-coverage item (Top 3 #3); fixed multi-frame gob decode bug found by tests; promoted Wayland backend order to new Top 3 #3; empty-cb line number refreshed (`clipport.go:646`).
+- 2026-09-22: shipped empty-clipboard root-cause (Top 3 #2): empty frames no longer emitted from `MonitorLocalClip`; receive-side drop kept as backstop for older peers; TODO removed.

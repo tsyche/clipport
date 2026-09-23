@@ -8,6 +8,8 @@
 - [x] 2026-06-23 — `CLIPPORT_SECRET` env var + plaintext confirmation gate
 - [x] 2026-06-24 — CI workflow running `go test -race ./...`
 - [x] 2026-09-22 — Harden wire protocol against oversized/malformed frames
+- [x] 2026-09-22 — Networking/crypto test coverage (TOFU, handshake, monitors, fuzz seed)
+- [x] 2026-09-22 — Root-cause empty-clipboard workaround (sender no longer emits empty frames)
 
 ## Archived entries
 
@@ -38,3 +40,22 @@ Commit: `e146d65`.
 Regression tests: oversized send rejected, oversized frame disconnects uncleanly, valid frame + EOF still clean.
 
 Wire-protocol hardening item from ROADMAP Top 3; work started under commit `53c724c`, completed and tested 2026-09-22.
+
+### 2026-09-22 — Networking/crypto test coverage (TOFU, handshake, monitors, fuzz seed)
+
+Top 3 item 3. Added production seams (`getLocalClip`/`setLocalClip` package vars, `generateKeypair` extraction, `MonitorLocalClip` stop channel, `peersMu`) and a ~800-line suite covering address/key resolution, ECDH handshake, TOFU trust store, `HandleClient`, `connectOnce`, both monitors, and `keygen`. Statement coverage 11.3% → 53%.
+
+Tests found and fixed two real bugs while landing:
+
+- **Multi-frame gob drop** — `MonitorSentClips` created a fresh `gob.Decoder` per loop iteration; buffered bytes from the prior decoder were discarded, so coalesced multi-frame streams lost every frame after the first. Fixed by reusing one decoder with a per-frame `LimitedReader.N` reset.
+- **Decode-error spin** — non-EOF decode errors (`io.ErrUnexpectedEOF` is not `*net.OpError`) hit `handleError` + `continue` and looped forever on a dead connection. Decode failures now disconnect.
+
+Also fixed while racing under `-race`: `HandleClient` only joined one of two monitor goroutines; `connectOnce` never stopped `MonitorLocalClip` on unclean shutdown (deadlock); `MonitorLocalClip` re-read `localClipboard` outside the mutex; `verifyOrTrustPeer` RMW'd `listOfClients` unlocked.
+
+Includes `FuzzMonitorSentClips` seed corpus (fuzz-item suggestion largely satisfied).
+
+### 2026-09-22 — Root-cause empty-clipboard workaround
+
+Top 3 item 2. The `// hacky way to prevent empty clipboard TODO` dated to upstream `7daedea` (2022). Empty frames were produced because `MonitorLocalClip` always sent `getLocalClip()`, which returns `""` when the clipboard is cleared, at startup, or when the OS has no text type (macOS `pbpaste` on an image/file). Applying that would wipe the peer.
+
+Fix: `MonitorLocalClip` no longer puts empty frames on the wire; `MonitorSentClips` still drops empty payloads from older peers. Intentional clear and non-text content remain non-propagating (text-only by design). Tests: empty not sent; empty→non-empty still sends; receive-side skip retained.

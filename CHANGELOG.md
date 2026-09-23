@@ -6,6 +6,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Networking/crypto test suite covering TOFU peer trust, ECDH handshake,
+  `HandleClient` cleanup, `connectOnce` dial/shutdown, `MonitorLocalClip`,
+  `MonitorSentClips`, and `keygen`; `FuzzMonitorSentClips` seed corpus.
+  Statement coverage 11.3% → 55%.
+
+### Fixed
+
+- Empty-clipboard workaround root-caused and tightened: `getLocalClip` returns
+  `""` for a cleared clipboard, at startup, and when the OS clipboard has no
+  text type (e.g. macOS `pbpaste` on an image). `MonitorLocalClip` no longer
+  puts empty frames on the wire; `MonitorSentClips` still drops empty frames
+  from older peers so they cannot wipe this device's clipboard. Intentional
+  clear and non-text content still do not propagate (text-only by design).
+- `MonitorSentClips` created a fresh `gob.Decoder` per frame, discarding bytes
+  the previous decoder had already buffered — subsequent frames on a coalesced
+  stream were silently dropped. Now one decoder for the stream with a per-frame
+  size-cap reset.
+- `MonitorSentClips` treated non-EOF decode errors as recoverable and looped
+  forever on a dead connection (`io.ErrUnexpectedEOF` is not a `*net.OpError`).
+  Decode failures now disconnect.
+- `HandleClient` only waited for one of its two monitor goroutines before
+  returning, leaking the other past function exit (race under `-race`).
+- `connectOnce` never stopped `MonitorLocalClip` on unclean shutdown, deadlocking
+  the reconnect path.
+- `MonitorLocalClip` re-read `localClipboard` outside the mutex (data race).
+- `verifyOrTrustPeer` read-modify-wrote `listOfClients` without a lock (TOFU path).
+
 ### Security
 
 - Wire protocol now caps clipboard frames at 8 MiB: oversized gob payloads

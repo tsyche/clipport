@@ -26,7 +26,7 @@ just sync-docs   # copy newer of CLAUDE.md/AGENTS.md over the other
 ## Key files
 
 - `clipport.go` — all application logic (single file)
-- `clipport_test.go` — crypto unit tests
+- `clipport_test.go` — unit tests (crypto, wire protocol, TOFU/handshake, monitors) + fuzz seed
 - `.goreleaser.yml` — release config (cross-compile + brew tap)
 - `flake.nix` — Nix build
 - `CONTRIBUTING.md` — setup, workflow, and branching conventions for contributors
