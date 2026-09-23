@@ -46,7 +46,7 @@ Wire-protocol hardening item from ROADMAP Top 3; work started under commit `53c7
 
 ### 2026-09-22 — Networking/crypto test coverage (TOFU, handshake, monitors, fuzz seed)
 
-Top 3 item 3. Added production seams (`getLocalClip`/`setLocalClip` package vars, `generateKeypair` extraction, `MonitorLocalClip` stop channel, `peersMu`) and a ~800-line suite covering address/key resolution, ECDH handshake, TOFU trust store, `HandleClient`, `connectOnce`, both monitors, and `keygen`. Statement coverage 11.3% → 53%.
+Top 3 item 3. Added production seams (`getLocalClip`/`setLocalClip` package vars, `generateKeypair` extraction, `MonitorLocalClip` stop channel, `peersMu`) and a ~800-line suite covering address/key resolution, ECDH handshake, TOFU trust store, `HandleClient`, `connectOnce`, both monitors, and `keygen`. Statement coverage 11.3% → 55%.
 
 Tests found and fixed two real bugs while landing:
 

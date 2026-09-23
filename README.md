@@ -86,7 +86,7 @@ brew install tsyche/tap/clipport
 
 Or grab a binary from the [releases page](https://github.com/tsyche/clipport/releases) and move it to `/usr/local/bin/clipport`.
 
-> **Note:** at least one of `xsel`, `xclip`, or `wl-clipboard` is required.
+> **Note:** at least one of `xsel`, `xclip`, or `wl-clipboard` is required (on Wayland, `wl-clipboard` is preferred when present).
 
 ### NixOS / Nix
 
