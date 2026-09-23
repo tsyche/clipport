@@ -80,6 +80,36 @@ of reconnecting, to avoid silently re-admitting an unverifiable peer.
 
 The server exits automatically once every connected device has disconnected (or on Ctrl+C, which also tells connected clients to exit instead of trying to reconnect).
 
+## Security model
+
+Clipport is built for a trusted local network (your Wi-Fi). The TCP port has no
+access control of its own — what each mode protects against:
+
+- **Plaintext (no `-s`/`-k`)** — no confidentiality, no integrity, no peer
+  identity. Anyone who can reach the port can join the clipboard and read or
+  inject whatever is copied, and nothing distinguishes a real peer from an
+  impostor. The startup confirmation exists to stop _accidental_ exposure, not
+  attackers. Plaintext links never auto-reconnect, so a dropped session cannot
+  silently be replaced by another host. `--max-clients` can bound how many
+  peers attach, but that is churn control, not authentication.
+- **Shared password (`-s`/`--secure`)** — clipboard frames are encrypted with
+  AES-256-GCM using a key derived from the password via scrypt. Passive
+  eavesdroppers on the network see ciphertext; without the password they also
+  cannot inject frames. Everyone who knows the password is equally trusted —
+  there is no per-device identity, so treat the password like a room key.
+- **Per-device keypair (`-k`/`--key`)** — the same AES-256-GCM encryption, but
+  keys are derived from an X25519 exchange and each device's public key is
+  pinned under `~/.clipport/known_peers` on first connection (trust on first
+  use). After that, a changed key aborts the session instead of silently
+  proceeding, which blocks both eavesdropping/injection and peer
+  impersonation. First contact still trusts whatever key answers — the same
+  caveat as first-time SSH — so verify fingerprints out of band if your threat
+  model includes an active attacker from the very first connect.
+
+No mode protects against a compromised device: anything with your user
+account can read the OS clipboard directly. Don't expose the listen port to
+the internet; use `-k` even on LANs you don't fully control.
+
 ## Installing
 
 ### macOS
