@@ -15,7 +15,7 @@
 - [x] 2026-09-23 — Prefer Wayland wl-paste/wl-copy when $WAYLAND_DISPLAY set (uniclip#26)
 - [x] 2026-09-23 — `clipport known-hosts` list/remove subcommand
 - [x] 2026-09-23 — Exponential reconnect backoff (3s→30s) + permanent -k mismatch stop
-- [x] 2026-09-23 — Multi-OS CI matrix (ubuntu/windows/macos)
+- [x] 2026-09-23 — Multi-OS CI matrix (ubuntu/windows/macOS)
 
 ## Archived entries
 
@@ -30,7 +30,7 @@ Top 3 items 2–3, shipped together as one reconnect-hardening slice.
 - `ConnectToServer` doubles the delay between failed `connectOnce` attempts: 3s → 6s → … → 30s cap (`nextBackoff`). A successful session resets the delay to 3s.
 - Handshake failures that cannot succeed by retrying (local key mismatch, peer rejection) are wrapped in `permanentError`; `connectOnce` prints a fix hint (`clipport known-hosts remove <peer>`) and returns `retry=false` instead of looping forever. Dial failures and mid-session drops remain transient (`retry=true`).
 
-### 2026-09-23 — Multi-OS CI matrix (ubuntu/windows/macos)
+### 2026-09-23 — Multi-OS CI matrix (ubuntu/windows/macOS)
 
 Top 3 candidate (New Suggestions 2026-09-23). `test.yml` job now uses `strategy.matrix.os` of `ubuntu-latest`, `windows-latest`, `macos-latest` with `fail-fast: false` so `normalizeWindowsClip` and platform clipboard tests run on real runners. Tests set both `HOME` and `USERPROFILE` via `setTestHome` so `os.UserHomeDir` is isolated on Windows.
 

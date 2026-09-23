@@ -1,4 +1,5 @@
 {
   "threshold": 5,
-  "reporters": ["consoleFull"]
+  "reporters": ["consoleFull"],
+  "ignore": ["**/AGENTS.md"]
 }

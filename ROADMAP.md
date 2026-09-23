@@ -39,8 +39,8 @@ Lower priority / not clearly actionable yet:
 1. **Image/binary clipboard support** — ~1 day
    - Text-only by design today: non-text content (e.g. macOS `pbpaste` on an image) returns `""` and never reaches peers; wire frames are `string`-oriented. Upstream users have asked for image paste (uniclip#23 comment thread); extension needs a wire-format change (length-prefixed bytes or type-tagged frames) and platform-native read/write for PNG/JPEG (and possibly files).
    - 🧑 needs-human: scope decision — images only, images+files, or full multi-format MIME
-2. **README security model section** — ~1 hour
-   - Plaintext vs `-s` (scrypt password) vs `-k` (X25519 TOFU) have scattered explanations across README flags and CLI prompts. A single "Security model" section spelling out the threat each mode addresses (and what plaintext does _not_ protect) would set expectations before someone pastes secrets over a LAN.
+2. **CLI security model section** — ~1 hour
+   - Plaintext vs `-s` (scrypt password) vs `-k` (X25519 TOFU) have scattered explanations across install docs and CLI prompts. A single "Security model" section spelling out the threat each mode addresses (and what plaintext does _not_ protect) would set expectations before someone pastes secrets over a LAN.
 3. **`clipport status` / peers subcommand** — ~1 hour
    - The server only prints a one-line trust/fingerprint message when each peer connects; there is no on-demand way to list currently connected clients, their peer IDs, or when clipboard content last changed. A `status` (or `peers`) subcommand — local IPC or a tiny query path on the existing port — would make multi-device setups debuggable without attaching a debugger.
 4. **Max-clients / connection cap on server** — ~30-60 minutes
