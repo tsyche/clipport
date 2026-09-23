@@ -210,6 +210,7 @@ func preserveGlobals(t *testing.T) {
 	oldQuiet, oldDebug := quiet, printDebugInfo
 	oldClipPush := lastClipPush.Load()
 	oldMaxClients, oldActive := maxClients, activeConns
+	oldDebounce := clipboardDebounce
 	t.Cleanup(func() {
 		secure, keyMode = oldSecure, oldKeyMode
 		password = oldPassword
@@ -221,6 +222,7 @@ func preserveGlobals(t *testing.T) {
 		quiet, printDebugInfo = oldQuiet, oldDebug
 		lastClipPush.Store(oldClipPush)
 		maxClients, activeConns = oldMaxClients, oldActive
+		clipboardDebounce = oldDebounce
 	})
 }
 
@@ -911,6 +913,94 @@ func TestMonitorLocalClipSendsAfterEmpty(t *testing.T) {
 	}
 }
 
+// A burst of local edits must coalesce into one frame carrying the final
+// value — intermediate states never reach the wire.
+func TestMonitorLocalClipDebouncesRapidChanges(t *testing.T) {
+	preserveGlobals(t)
+	secondsBetweenChecksForClipChange = 1
+	clipboardDebounce = 100 * time.Millisecond
+
+	var clipMu sync.Mutex
+	clip := "one"
+	stubClipboard(t, func() string {
+		clipMu.Lock()
+		defer clipMu.Unlock()
+		return clip
+	})
+
+	var mu sync.Mutex
+	var wire bytes.Buffer
+	w := bufio.NewWriter(struct {
+		io.Writer
+	}{Writer: &muWriter{mu: &mu, b: &wire}})
+
+	decodeAll := func() []string {
+		mu.Lock()
+		data := append([]byte(nil), wire.Bytes()...)
+		mu.Unlock()
+		var out []string
+		dec := gob.NewDecoder(bytes.NewReader(data))
+		for {
+			var p []byte
+			if err := dec.Decode(&p); err != nil {
+				break
+			}
+			out = append(out, string(p))
+		}
+		return out
+	}
+
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		MonitorLocalClip(w, nil, stop)
+		close(done)
+	}()
+
+	// Wait for the initial snapshot frame before mutating the stub.
+	deadline := time.After(3 * time.Second)
+	for len(decodeAll()) < 1 {
+		select {
+		case <-deadline:
+			t.Fatal("initial frame never sent")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+
+	// Burst completes well before the 1s change-poll observes it.
+	for _, v := range []string{"two", "three", "four"} {
+		clipMu.Lock()
+		clip = v
+		clipMu.Unlock()
+		time.Sleep(30 * time.Millisecond)
+	}
+
+	deadline = time.After(3 * time.Second)
+	for len(decodeAll()) < 2 {
+		select {
+		case <-deadline:
+			t.Fatalf("debounced frame never sent; frames = %v", decodeAll())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	// Give any (incorrect) extra sends time to land before the final count.
+	time.Sleep(300 * time.Millisecond)
+	close(stop)
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("MonitorLocalClip did not return after stop")
+	}
+
+	frames := decodeAll()
+	if len(frames) != 2 {
+		t.Fatalf("frames = %v, want exactly [one four]", frames)
+	}
+	if frames[0] != "one" || frames[1] != "four" {
+		t.Errorf("frames = %v, want [one four] (intermediates suppressed)", frames)
+	}
+}
+
 type muWriter struct {
 	mu *sync.Mutex
 	b  *bytes.Buffer
@@ -1486,6 +1576,7 @@ func preserveGlobalsFuzz(t *testing.T) {
 	oldClipboard := localClipboard
 	oldGet, oldSet := getLocalClip, setLocalClip
 	oldSeconds := secondsBetweenChecksForClipChange
+	oldDebounce := clipboardDebounce
 	t.Cleanup(func() {
 		secure, keyMode = oldSecure, oldKeyMode
 		password = oldPassword
@@ -1493,6 +1584,7 @@ func preserveGlobalsFuzz(t *testing.T) {
 		localClipboard = oldClipboard
 		getLocalClip, setLocalClip = oldGet, oldSet
 		secondsBetweenChecksForClipChange = oldSeconds
+		clipboardDebounce = oldDebounce
 	})
 }
 

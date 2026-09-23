@@ -78,12 +78,16 @@ Refer to https://github.com/tsyche/clipport for more information`
 	maxClients = 8
 	// activeConns counts accepted-but-not-yet-finished connections (slot
 	// accounting for --max-clients). Guarded by mu.
-	activeConns    = 0
-	version        = "dev"
-	cryptoStrength = 16384
-	secure         = false
-	keyMode        = false
-	password       []byte
+	activeConns = 0
+	// clipboardDebounce is the quiet window MonitorLocalClip waits after an
+	// observed change before sending — coalesces rapid multi-step edits into
+	// one frame carrying the final value. Package var so tests can shorten it.
+	clipboardDebounce = 250 * time.Millisecond
+	version           = "dev"
+	cryptoStrength    = 16384
+	secure            = false
+	keyMode           = false
+	password          []byte
 
 	// stateDir overrides where keys/known_peers live (--dir flag; empty means
 	// fall back to $CLIPPORT_DIR, then ~/.clipport — see clipportDir).
@@ -912,6 +916,9 @@ func connectOnce(address string) (retry, reached bool) {
 // cleared clipboard, at startup, and whenever the OS clipboard has no
 // text representation (e.g. macOS pbpaste on an image). Sending those
 // would wipe peers; see MonitorSentClips for the receive-side backstop.
+// The initial snapshot sends immediately; subsequent changes pass through
+// a quiet-window debounce so a burst of edits puts one frame (the final
+// value) on the wire instead of one per poll.
 func MonitorLocalClip(w *bufio.Writer, key []byte, stop <-chan struct{}) {
 	for {
 		select {
@@ -951,7 +958,33 @@ func MonitorLocalClip(w *bufio.Writer, key []byte, stop <-chan struct{}) {
 				break
 			}
 		}
+		// Change observed: coalesce until the value holds still for the
+		// debounce window, then let the top of the loop send the latest.
+		if !waitClipboardQuiet(stop) {
+			return
+		}
 	}
+}
+
+// waitClipboardQuiet polls getLocalClip until the value has been unchanged
+// for clipboardDebounce (resetting the window on every new value). Returns
+// false if stop closed first.
+func waitClipboardQuiet(stop <-chan struct{}) bool {
+	const poll = 50 * time.Millisecond
+	lastChange := time.Now()
+	latest := getLocalClip()
+	for time.Since(lastChange) < clipboardDebounce {
+		select {
+		case <-stop:
+			return false
+		case <-time.After(poll):
+		}
+		if cur := getLocalClip(); cur != latest {
+			latest = cur
+			lastChange = time.Now()
+		}
+	}
+	return true
 }
 
 // monitors for clipboards sent through r; returns true on clean server shutdown (EOF)
