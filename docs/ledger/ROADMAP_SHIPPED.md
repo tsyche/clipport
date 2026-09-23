@@ -20,8 +20,19 @@
 - [x] 2026-09-23 — `CLIPPORT_DIR` env override + `--dir` flag
 - [x] 2026-09-23 — `--quiet`/`-q` flag (errors-only headless mode)
 - [x] 2026-09-23 — `clipport status` subcommand (unix-socket status query)
+- [x] 2026-09-23 — Max-clients cap (`--max-clients`, slot accounting)
 
 ## Archived entries
+
+### 2026-09-23 — Max-clients cap (`--max-clients`, slot accounting)
+
+Top 3 item 1. Plaintext mode already warns and requires confirmation before joining, but the server never bounds
+how many peers attach; anyone who can reach the port can keep connecting. A `--max-clients N` flag (sensible
+default, e.g. 8) limits accidental exposure and log noise without adding real auth — pairs with the
+plaintext-transport-security backlog item as a stopgap, not a replacement. Shipped as default 8, `0` =
+unlimited; `activeConns` counts pending handshakes too (`tryReserveClientSlot`/`releaseClientSlot`), overflow
+closed with a server-side reject log, `clipport status` shows `Clients (n/max)`. Covered by
+`TestTryReserveClientSlotEnforcesCap`, `TestTryReserveClientSlotUnlimitedWhenZero`, `TestCurrentStatusSnapshot`.
 
 ### 2026-09-23 — `clipport status` subcommand (unix-socket status query)
 
