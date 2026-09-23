@@ -11,6 +11,8 @@
 - [x] 2026-09-22 — Networking/crypto test coverage (TOFU, handshake, monitors, fuzz seed)
 - [x] 2026-09-22 — Root-cause empty-clipboard workaround (sender no longer emits empty frames)
 - [x] 2026-09-23 — Windows CRLF normalization on clipboard reads (uniclip#36)
+- [x] 2026-09-23 — Clipboard read-error dedupe for non-text content (uniclip#23)
+- [x] 2026-09-23 — Prefer Wayland wl-paste/wl-copy when $WAYLAND_DISPLAY set (uniclip#26)
 
 ## Archived entries
 
@@ -66,3 +68,15 @@ Fix: `MonitorLocalClip` no longer puts empty frames on the wire; `MonitorSentCli
 Top 3 item 1. Port of upstream [uniclip#36](https://github.com/quackduck/uniclip/pull/36) for [uniclip#35](https://github.com/quackduck/uniclip/issues/35): PowerShell `Get-Clipboard` rewrites every LF as CRLF and appends a trailing CRLF; `runGetClipCommand` only trimmed the trailing sequence, so internal CRLFs corrupted multi-line text on receiving peers.
 
 Fix: extracted pure `normalizeWindowsClip` — `strings.ReplaceAll(s, "\r\n", "\n")` then trim one trailing `\n` — called on the Windows read path. Unit tests cover trailing CRLF, internal CRLF, LF-only input, lone CR, idempotence.
+
+### 2026-09-23 — Clipboard read-error dedupe for non-text content
+
+Top 3 item (error-spam). Upstream [uniclip#23](https://github.com/quackduck/uniclip/issues/23): with an image (or other non-text) on the clipboard, `runGetClipCommand` called `handleError` every poll (~1/s) and returned the sentinel `"An error occurred while getting the local clipboard"`, which `MonitorLocalClip` then put on the wire — peers pasted that string as text.
+
+Fix: first failure in a streak logs once with a suppress-until-success note (`clipReadErrReported` atomic latch); subsequent failures silent; failed reads return `""` so nothing is sent (consistent with empty-frame policy). Reset on any successful read.
+
+### 2026-09-23 — Prefer Wayland wl-paste/wl-copy when session is Wayland
+
+Top 3 item (Wayland backend). Upstream [uniclip#26](https://github.com/quackduck/uniclip/issues/26): `linux` get/set preferred `xclip` whenever present; on Wayland with xclip installed, xclip fails `exit status 1`.
+
+Fix: `linuxClipboardCommand` — when `$WAYLAND_DISPLAY` is set, try `wl-paste`/`wl-copy` first, then the historical order (xclip, xsel, wl-*, termux) as fallback. X11 sessions without `WAYLAND_DISPLAY` keep xclip-first. Tests: fake PATH binaries for Wayland-first, X11 order, missing-wl fallback, no-tools error.

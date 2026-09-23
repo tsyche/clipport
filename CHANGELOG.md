@@ -15,6 +15,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Non-text clipboard content (e.g. an image) no longer floods stderr with
+  `exit status 1` every poll: the first read failure in a streak is logged
+  with a hint, further failures are suppressed until a read succeeds, and
+  the failed read returns `""` instead of an error sentinel so peers never
+  receive the message as clipboard text (uniclip#23).
+- On Wayland sessions (`$WAYLAND_DISPLAY` set), `wl-paste`/`wl-copy` are
+  preferred over `xclip`/`xsel`, so a Wayland machine that also has xclip
+  installed uses the Wayland-native tool instead of failing with
+  `exit status 1` (uniclip#26).
 - Windows clipboard reads no longer corrupt multi-line text: PowerShell
   `Get-Clipboard` rewrites every LF as CRLF and appends a trailing CRLF; only
   the trailing sequence was trimmed before, so internal CRLFs reached peers

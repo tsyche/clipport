@@ -876,6 +876,126 @@ func TestNormalizeWindowsClipIdempotent(t *testing.T) {
 	}
 }
 
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stderr = w
+	defer func() { os.Stderr = old }()
+	fn()
+	_ = w.Close()
+	out, err := io.ReadAll(r)
+	_ = r.Close()
+	if err != nil {
+		t.Fatalf("read stderr: %v", err)
+	}
+	return string(out)
+}
+
+func TestClipReadFailureReportedOnceUntilSuccess(t *testing.T) {
+	clipReadErrReported.Store(false)
+
+	first := captureStderr(t, func() {
+		reportClipReadFailure(errors.New("exit status 1"))
+	})
+	if !strings.Contains(first, "cannot read clipboard as text") {
+		t.Errorf("first failure should log, got %q", first)
+	}
+
+	second := captureStderr(t, func() {
+		reportClipReadFailure(errors.New("exit status 1"))
+	})
+	if second != "" {
+		t.Errorf("second failure should be suppressed, got %q", second)
+	}
+
+	reportClipReadSuccess()
+
+	third := captureStderr(t, func() {
+		reportClipReadFailure(errors.New("exit status 1"))
+	})
+	if !strings.Contains(third, "cannot read clipboard as text") {
+		t.Errorf("failure after success should log again, got %q", third)
+	}
+	clipReadErrReported.Store(false)
+}
+
+func writeFakeBin(t *testing.T, dir, name string) {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write fake %s: %v", name, err)
+	}
+}
+
+func TestLinuxClipboardCommandPrefersWaylandWhenSessionSet(t *testing.T) {
+	dir := t.TempDir()
+	writeFakeBin(t, dir, "xclip")
+	writeFakeBin(t, dir, "xsel")
+	writeFakeBin(t, dir, "wl-paste")
+	writeFakeBin(t, dir, "wl-copy")
+	t.Setenv("PATH", dir)
+	t.Setenv("WAYLAND_DISPLAY", "wayland-0")
+
+	getCmd, err := linuxClipboardCommand(true)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if filepath.Base(getCmd.Path) != "wl-paste" {
+		t.Errorf("get tool = %v, want wl-paste", getCmd.Args)
+	}
+
+	setCmd, err := linuxClipboardCommand(false)
+	if err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	if filepath.Base(setCmd.Path) != "wl-copy" {
+		t.Errorf("set tool = %v, want wl-copy", setCmd.Args)
+	}
+}
+
+func TestLinuxClipboardCommandX11OrderWithoutWayland(t *testing.T) {
+	dir := t.TempDir()
+	writeFakeBin(t, dir, "xclip")
+	writeFakeBin(t, dir, "wl-paste")
+	t.Setenv("PATH", dir)
+	t.Setenv("WAYLAND_DISPLAY", "")
+
+	getCmd, err := linuxClipboardCommand(true)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if filepath.Base(getCmd.Path) != "xclip" {
+		t.Errorf("get tool = %v, want xclip on X11", getCmd.Args)
+	}
+}
+
+func TestLinuxClipboardCommandWaylandFallbackToXclip(t *testing.T) {
+	dir := t.TempDir()
+	writeFakeBin(t, dir, "xclip")
+	t.Setenv("PATH", dir)
+	t.Setenv("WAYLAND_DISPLAY", "wayland-0")
+
+	getCmd, err := linuxClipboardCommand(true)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if filepath.Base(getCmd.Path) != "xclip" {
+		t.Errorf("get tool = %v, want xclip fallback when wl-paste missing", getCmd.Args)
+	}
+}
+
+func TestLinuxClipboardCommandNoTools(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("WAYLAND_DISPLAY", "wayland-0")
+	if _, err := linuxClipboardCommand(true); err == nil {
+		t.Error("expected error when no clipboard tools exist")
+	}
+}
+
 func FuzzMonitorSentClips(f *testing.F) {
 	f.Add([]byte{})
 	f.Add(encodeFrameForFuzz([]byte("ok")))

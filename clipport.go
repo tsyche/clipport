@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -70,6 +71,11 @@ Refer to https://github.com/tsyche/clipport for more information`
 	// clipboard without depending on pbpaste/xclip being present or writable.
 	getLocalClip = runGetClipCommand
 	setLocalClip = runSetClipCommand
+
+	// clipReadErrReported latches after the first clipboard read failure so
+	// non-text content (image/file) does not spam handleError every poll
+	// (uniclip#23). Cleared when a read succeeds.
+	clipReadErrReported atomic.Bool
 )
 
 // maxClipboardFrameBytes caps a single gob-encoded clipboard frame on the
@@ -786,27 +792,83 @@ func runGetClipCommand() string {
 	case "windows": //nolint // complains about literal string "windows" being used multiple times
 		cmd = exec.Command("powershell.exe", "-command", "Get-Clipboard")
 	default:
-		if _, err = exec.LookPath("xclip"); err == nil {
-			cmd = exec.Command("xclip", "-out", "-selection", "clipboard")
-		} else if _, err = exec.LookPath("xsel"); err == nil {
-			cmd = exec.Command("xsel", "--output", "--clipboard")
-		} else if _, err = exec.LookPath("wl-paste"); err == nil {
-			cmd = exec.Command("wl-paste", "--no-newline")
-		} else if _, err = exec.LookPath("termux-clipboard-get"); err == nil {
-			cmd = exec.Command("termux-clipboard-get")
-		} else {
-			handleError(errors.New("sorry, clipport won't work if you don't have xsel, xclip, wayland or Termux installed :(\nyou can create an issue at https://github.com/tsyche/clipport/issues"))
+		cmd, err = linuxClipboardCommand(true)
+		if err != nil {
+			handleError(err)
 			os.Exit(2)
 		}
 	}
 	if out, err = cmd.Output(); err != nil {
-		handleError(err)
-		return "An error occurred while getting the local clipboard"
+		// Unreadable clipboard (non-text, e.g. image): report once per
+		// failure streak, then stay quiet. Return "" so MonitorLocalClip
+		// does not put an error sentinel on the wire (uniclip#23).
+		reportClipReadFailure(err)
+		return ""
 	}
+	reportClipReadSuccess()
 	if runtime.GOOS == "windows" {
 		return normalizeWindowsClip(string(out))
 	}
 	return string(out)
+}
+
+// reportClipReadFailure logs a clipboard read error at most once until
+// reportClipReadSuccess runs — non-text content would otherwise print
+// every poll (uniclip#23).
+func reportClipReadFailure(err error) {
+	if clipReadErrReported.CompareAndSwap(false, true) {
+		handleError(fmt.Errorf("cannot read clipboard as text (non-text content?): %w", err))
+		fmt.Fprintln(os.Stderr, "error: suppressing further clipboard read errors until a read succeeds")
+	}
+}
+
+func reportClipReadSuccess() {
+	clipReadErrReported.Store(false)
+}
+
+// linuxClipboardCommand picks a clipboard utility for Linux/BSD/Termux.
+// On a Wayland session ($WAYLAND_DISPLAY set) wl-paste/wl-copy are tried
+// first so a Wayland box that also has xclip does not pick the X11 tool
+// and fail with exit status 1 (uniclip#26). Otherwise the historical
+// order is kept: xclip, xsel, wl-*, termux.
+func linuxClipboardCommand(get bool) (*exec.Cmd, error) {
+	wayland := os.Getenv("WAYLAND_DISPLAY") != ""
+	type tool struct {
+		name string
+		args []string
+	}
+	var tools []tool
+	if wayland {
+		if get {
+			tools = append(tools, tool{"wl-paste", []string{"--no-newline"}})
+		} else {
+			tools = append(tools, tool{"wl-copy", nil})
+		}
+	}
+	if get {
+		tools = append(tools,
+			tool{"xclip", []string{"-out", "-selection", "clipboard"}},
+			tool{"xsel", []string{"--output", "--clipboard"}},
+			tool{"wl-paste", []string{"--no-newline"}},
+			tool{"termux-clipboard-get", nil},
+		)
+	} else {
+		tools = append(tools,
+			tool{"xclip", []string{"-in", "-selection", "clipboard"}},
+			tool{"xsel", []string{"--input", "--clipboard"}},
+			tool{"wl-copy", nil},
+			tool{"termux-clipboard-set", nil},
+		)
+	}
+	for _, t := range tools {
+		if _, err := exec.LookPath(t.name); err == nil {
+			return exec.Command(t.name, t.args...), nil
+		}
+	}
+	if get {
+		return nil, errors.New("sorry, clipport won't work if you don't have xsel, xclip, wayland or Termux installed :(\nyou can create an issue at https://github.com/tsyche/clipport/issues")
+	}
+	return nil, errors.New("sorry, clipport won't work if you don't have xsel, xclip, wayland or Termux:API installed :(\nyou can create an issue at https://github.com/tsyche/clipport/issues")
 }
 
 // normalizeWindowsClip converts PowerShell Get-Clipboard output to LF-only
@@ -820,22 +882,16 @@ func normalizeWindowsClip(s string) string {
 
 func runSetClipCommand(s string) {
 	var copyCmd *exec.Cmd
+	var err error
 	switch runtime.GOOS {
 	case "darwin":
 		copyCmd = exec.Command("pbcopy")
 	case "windows":
 		copyCmd = exec.Command("clip")
 	default:
-		if _, err := exec.LookPath("xclip"); err == nil {
-			copyCmd = exec.Command("xclip", "-in", "-selection", "clipboard")
-		} else if _, err = exec.LookPath("xsel"); err == nil {
-			copyCmd = exec.Command("xsel", "--input", "--clipboard")
-		} else if _, err = exec.LookPath("wl-copy"); err == nil {
-			copyCmd = exec.Command("wl-copy")
-		} else if _, err = exec.LookPath("termux-clipboard-set"); err == nil {
-			copyCmd = exec.Command("termux-clipboard-set")
-		} else {
-			handleError(errors.New("sorry, clipport won't work if you don't have xsel, xclip, wayland or Termux:API installed :(\nyou can create an issue at https://github.com/tsyche/clipport/issues"))
+		copyCmd, err = linuxClipboardCommand(false)
+		if err != nil {
+			handleError(err)
 			os.Exit(2)
 		}
 	}
