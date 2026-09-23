@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -957,7 +958,17 @@ func writeFakeBin(t *testing.T, dir, name string) {
 	}
 }
 
+// skipUnlessLinux: linuxClipboardCommand tests exec shebang scripts via PATH,
+// which only works where the kernel honors #! (not Windows).
+func skipUnlessLinux(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS != "linux" {
+		t.Skip("linux clipboard tool selection only runs on linux")
+	}
+}
+
 func TestLinuxClipboardCommandPrefersWaylandWhenSessionSet(t *testing.T) {
+	skipUnlessLinux(t)
 	dir := t.TempDir()
 	writeFakeBin(t, dir, "xclip")
 	writeFakeBin(t, dir, "xsel")
@@ -984,6 +995,7 @@ func TestLinuxClipboardCommandPrefersWaylandWhenSessionSet(t *testing.T) {
 }
 
 func TestLinuxClipboardCommandX11OrderWithoutWayland(t *testing.T) {
+	skipUnlessLinux(t)
 	dir := t.TempDir()
 	writeFakeBin(t, dir, "xclip")
 	writeFakeBin(t, dir, "wl-paste")
@@ -1000,6 +1012,7 @@ func TestLinuxClipboardCommandX11OrderWithoutWayland(t *testing.T) {
 }
 
 func TestLinuxClipboardCommandWaylandFallbackToXclip(t *testing.T) {
+	skipUnlessLinux(t)
 	dir := t.TempDir()
 	writeFakeBin(t, dir, "xclip")
 	t.Setenv("PATH", dir)
@@ -1015,6 +1028,7 @@ func TestLinuxClipboardCommandWaylandFallbackToXclip(t *testing.T) {
 }
 
 func TestLinuxClipboardCommandNoTools(t *testing.T) {
+	skipUnlessLinux(t)
 	t.Setenv("PATH", t.TempDir())
 	t.Setenv("WAYLAND_DISPLAY", "wayland-0")
 	if _, err := linuxClipboardCommand(true); err == nil {
