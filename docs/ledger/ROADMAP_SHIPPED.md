@@ -21,8 +21,18 @@
 - [x] 2026-09-23 — `--quiet`/`-q` flag (errors-only headless mode)
 - [x] 2026-09-23 — `clipport status` subcommand (unix-socket status query)
 - [x] 2026-09-23 — Max-clients cap (`--max-clients`, slot accounting)
+- [x] 2026-09-23 — Clipboard change debounce (250ms quiet window)
 
 ## Archived entries
+
+### 2026-09-23 — Clipboard change debounce (250ms quiet window)
+
+Top 3 item 1. `MonitorLocalClip` polls and sends on every observed change; rapid multi-line edits or a large
+terminal dump can put many frames on the wire before the receiver pastes. Debouncing (e.g. 100–300ms quiet
+window, send only the latest snapshot) cuts churn and avoids peers receiving intermediate states they never
+see locally. Shipped as a 250ms quiet window (`waitClipboardQuiet`, 50ms poll): the startup snapshot still
+sends immediately; every later change coalesces to one frame with the final value. Covered by
+`TestMonitorLocalClipDebouncesRapidChanges` (burst `[one two three four]` → frames `[one four]`).
 
 ### 2026-09-23 — Max-clients cap (`--max-clients`, slot accounting)
 

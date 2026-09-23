@@ -4,12 +4,12 @@ Inferred from the codebase on 2026-06-16 (no prior ROADMAP.md existed); audited 
 
 ## Top 3 Suggested Tasks
 
-1. **Clipboard change debounce / coalesce** — ~1 hour
-   - `MonitorLocalClip` polls and sends on every observed change; rapid multi-line edits or a large terminal dump can put many frames on the wire before the receiver pastes. Debouncing (e.g. 100–300ms quiet window, send only the latest snapshot) cuts churn and avoids peers receiving intermediate states they never see locally.
-2. **CLI security model section** — ~1 hour
+1. **CLI security model section** — ~1 hour
    - Plaintext vs `-s` (scrypt password) vs `-k` (X25519 TOFU) have scattered explanations across install docs and CLI prompts. A single "Security model" section spelling out the threat each mode addresses (and what plaintext does _not_ protect) would set expectations before someone pastes secrets over a LAN.
-3. **Sleep/wake detection to speed up dead-peer recovery** — ~2-3 hours
+2. **Sleep/wake detection to speed up dead-peer recovery** — ~2-3 hours
    - Both sides rely on TCP keepalive (30s period, several missed probes) to notice a vanished peer — this can take minutes after wake before either side reacts. Detecting the local machine's own wake (e.g. macOS `NSWorkspace` notifications, or a large wall-clock gap between poll iterations) and immediately probing/closing stale connections would make recovery near-instant instead of "eventually."
+3. **Wire fuzz run into CI** — ~1 hour
+   - `FuzzMonitorSentClips` seed corpus exists but CI only runs the seed (`go test` without `-fuzz`). A short `-fuzz` job (e.g. 60s per PR) would catch decode regressions the static corpus misses.
 
 ## Inherited from upstream (quackduck/uniclip) — triaged 2026-06-16
 
@@ -25,11 +25,6 @@ Lower priority / not clearly actionable yet:
 1. **Server re-announces or survives an IP change after reassociation** — ~half day, needs design
    - The connect string (`clipport <ip>:<port>`) is printed once at startup. If the server's Wi-Fi reassociates after sleep and gets a new DHCP lease, that printed IP goes stale and clients get "could not connect" with no indication why.
    - Options: periodically re-announce the current IP, or move to mDNS/Bonjour-style discovery instead of a static printed address (may overlap with Remote Connectivity below).
-
-## New Suggestions (2026-09-22)
-
-1. **Fuzz wire decode path** — ~1 hour — largely done
-   - `FuzzMonitorSentClips` seed corpus landed with the 2026-09-22 test-coverage push; optional follow-up is wiring a short `go test -fuzz` run into CI.
 
 ## New Suggestions (2026-09-23) — approved
 
@@ -91,3 +86,4 @@ Security constraint: remote mode must require `-k`; clear error message if attem
 - 2026-09-23: shipped `--quiet`/`-q` errors-only mode (Top 3 #1). New Top 3: status/peers, max-clients, debounce (promoted from 2026-09-23 suggestions).
 - 2026-09-23: shipped `clipport status` subcommand (Top 3 #1, unix-socket query path). New Top 3: max-clients, debounce, CLI security-model docs (promoted from 2026-09-23 suggestions).
 - 2026-09-23: shipped max-clients cap (Top 3 #1, `--max-clients` default 8 / 0=unlimited, pending-handshake slot accounting). New Top 3: debounce, CLI security-model docs, sleep/wake recovery (promoted from 2026-07-02 suggestions). No new suggestions (2026-09-23 batch already approved).
+- 2026-09-23: shipped clipboard debounce (Top 3 #1, 250ms quiet window in `waitClipboardQuiet`; startup snapshot unsent-delayed). New Top 3: CLI security-model docs, sleep/wake recovery, fuzz CI wiring (promoted from 2026-09-22 suggestions). No new suggestions.
