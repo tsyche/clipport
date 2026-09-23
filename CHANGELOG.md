@@ -16,7 +16,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   interactive prompts, and security warnings still print.
 - `clipport status`: reports the running server's pid, port, connected
   clients, and when a clipboard frame was last pushed. Served over a
-  unix socket in the state directory (`clipport.sock`, mode 0600) —
+  Unix socket in the state directory (`clipport.sock`, mode 0600) —
   local-only query path, no auth needed, exits 1 when no server runs.
 - `clipport known-hosts` subcommand: `list` (default) shows trusted `-k`
   peers with fingerprints; `remove <peer>` deletes an entry so key rotation

@@ -25,7 +25,13 @@
 
 ### 2026-09-23 — `clipport status` subcommand (unix-socket status query)
 
-Top 3 item 1. The server exposes a local unix socket (`<statedir>/clipport.sock`, mode 0600) via `startStatusServer`/`serveStatus`; `clipport status` dials it (`queryStatus`) and prints pid, listen port, connected client addresses, and time since the last clipboard push (`lastClipPush`, set by `MonitorLocalClip` after a successful send). Local-only query path — no auth needed, dead server = dial failure with exit 1; direct subcommand output is not gated by `--quiet`. Covered by `TestCurrentStatusSnapshot`, `TestServeStatusRoundtrip`, `TestQueryStatusNoServer`, `TestRunStatusNoServerErrorIsNotSilent`.
+Top 3 item 1. The server exposes a local Unix socket (`<statedir>/clipport.sock`, mode 0600) via
+`startStatusServer`/`serveStatus`; `clipport status` dials it (`queryStatus`) and prints pid, listen
+port, connected client addresses, and time since the last clipboard push (`lastClipPush`, set by
+`MonitorLocalClip` after a successful send). Local-only query path — no auth needed, dead server =
+dial failure with exit 1; direct subcommand output is not gated by `--quiet`. Covered by
+`TestCurrentStatusSnapshot`, `TestServeStatusRoundtrip`, `TestQueryStatusNoServer`,
+`TestRunStatusNoServerErrorIsNotSilent`.
 
 ### 2026-09-23 — `--quiet`/`-q` flag (errors-only headless mode)
 
@@ -37,7 +43,11 @@ Top 3 item 1. `clipportDir()` resolves state (keys, `known_peers`) as: `--dir` f
 
 ### 2026-09-23 — IPv6 / dual-stack support
 
-Top 3 item 1. Server binds with `net.Listen("tcp", …)` (was `tcp4`) and clients dial with `net.Dial("tcp", …)`, so IPv6-only and dual-stack LANs connect. `resolveClientAddress` builds addresses with `net.JoinHostPort`, accepting bracketed (`[fe80::1]:53701`), bare (`::1 -p 53701`), and zone-qualified forms; the printed join command brackets IPv6 addresses. IPv4 behavior unchanged; covered by `TestResolveClientAddress` IPv6 cases and `TestDualStackListenDial`.
+Top 3 item 1. Server binds with `net.Listen("tcp", …)` (was `tcp4`) and clients dial with
+`net.Dial("tcp", …)`, so IPv6-only and dual-stack LANs connect. `resolveClientAddress` builds
+addresses with `net.JoinHostPort`, accepting bracketed (`[fe80::1]:53701`), bare (`::1 -p 53701`),
+and zone-qualified forms; the printed join command brackets IPv6 addresses. IPv4 behavior unchanged;
+covered by `TestResolveClientAddress` IPv6 cases and `TestDualStackListenDial`.
 
 ### 2026-09-23 — `clipport known-hosts` list/remove subcommand
 

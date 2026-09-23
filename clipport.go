@@ -587,7 +587,7 @@ func serveStatus(l net.Listener, port string) {
 		}
 		data, err := json.Marshal(currentStatus(port))
 		if err == nil {
-			_, _ = c.Write(append(data, '\n'))
+			_, _ = c.Write(append(data, '\n')) //nolint:errcheck // best-effort status reply; a failed write just loses the report
 		}
 		_ = c.Close()
 	}
@@ -610,7 +610,7 @@ func startStatusServer(port string) {
 		debug("status socket unavailable:", err)
 		return
 	}
-	_ = os.Chmod(sock, 0600)
+	_ = os.Chmod(sock, 0600) //nolint:errcheck // best-effort hardening; socket still works if chmod fails
 	go serveStatus(l, port)
 }
 
