@@ -68,8 +68,8 @@ Refer to https://github.com/tsyche/clipport for more information`
 
 	// Clipboard access is routed through vars so tests can stub the system
 	// clipboard without depending on pbpaste/xclip being present or writable.
-	getLocalClip = func() string { return runGetClipCommand() }
-	setLocalClip = func(s string) { runSetClipCommand(s) }
+	getLocalClip = runGetClipCommand
+	setLocalClip = runSetClipCommand
 )
 
 // maxClipboardFrameBytes caps a single gob-encoded clipboard frame on the
@@ -633,12 +633,10 @@ func MonitorSentClips(r *bufio.Reader, key []byte) bool {
 			return false
 		}
 		if err != nil {
-			if err == io.EOF {
-				return true // clean shutdown by server
-			}
-			// Unexpected EOF / network drop / desynced stream: disconnect.
-			// Continuing here would spin forever on a dead connection.
-			return false
+			// Clean EOF = server shutdown. Any other error (unexpected EOF,
+			// network drop, desynced stream): disconnect — continuing would
+			// spin forever on a dead connection.
+			return err == io.EOF
 		}
 
 		// decrypt if needed

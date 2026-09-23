@@ -922,7 +922,9 @@ func monitorSentClipsNoHang(t *testing.T, data []byte) {
 // encodeFrameForFuzz is encodeFrame without *testing.T for fuzz helpers.
 func encodeFrameForFuzz(payload []byte) []byte {
 	var buf bytes.Buffer
-	_ = gob.NewEncoder(&buf).Encode(payload)
+	if err := gob.NewEncoder(&buf).Encode(payload); err != nil {
+		panic(err) // bytes.Buffer writes cannot fail
+	}
 	return buf.Bytes()
 }
 
