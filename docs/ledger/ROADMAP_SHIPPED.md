@@ -16,8 +16,13 @@
 - [x] 2026-09-23 — `clipport known-hosts` list/remove subcommand
 - [x] 2026-09-23 — Exponential reconnect backoff (3s→30s) + permanent -k mismatch stop
 - [x] 2026-09-23 — Multi-OS CI matrix (ubuntu/windows/macOS)
+- [x] 2026-09-23 — IPv6 / dual-stack support (tcp4 → tcp, bracketed client addrs)
 
 ## Archived entries
+
+### 2026-09-23 — IPv6 / dual-stack support
+
+Top 3 item 1. Server binds with `net.Listen("tcp", …)` (was `tcp4`) and clients dial with `net.Dial("tcp", …)`, so IPv6-only and dual-stack LANs connect. `resolveClientAddress` builds addresses with `net.JoinHostPort`, accepting bracketed (`[fe80::1]:53701`), bare (`::1 -p 53701`), and zone-qualified forms; the printed join command brackets IPv6 addresses. IPv4 behavior unchanged; covered by `TestResolveClientAddress` IPv6 cases and `TestDualStackListenDial`.
 
 ### 2026-09-23 — `clipport known-hosts` list/remove subcommand
 

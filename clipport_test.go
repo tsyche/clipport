@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -270,6 +271,11 @@ func TestResolveClientAddress(t *testing.T) {
 		{name: "matching embedded and flag", addr: "192.168.1.5:53701", port: "53701", want: "192.168.1.5:53701"},
 		{name: "conflicting ports", addr: "192.168.1.5:1111", port: "2222", wantErr: true},
 		{name: "no port anywhere", addr: "192.168.1.5", port: "", wantErr: true},
+		{name: "ipv6 hostport only", addr: "[::1]:53701", port: "", want: "[::1]:53701"},
+		{name: "ipv6 bare host plus port flag", addr: "::1", port: "53701", want: "[::1]:53701"},
+		{name: "ipv6 bracketed without port", addr: "[::1]", port: "53701", want: "[::1]:53701"},
+		{name: "ipv6 matching embedded and flag", addr: "[fe80::1%en0]:53701", port: "53701", want: "[fe80::1%en0]:53701"},
+		{name: "ipv6 bare no port anywhere", addr: "::1", port: "", wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -288,6 +294,46 @@ func TestResolveClientAddress(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestDualStackListenDial mirrors production networking: listen with "tcp"
+// (dual-stack, all interfaces) and dial over both IPv4 loopback and IPv6
+// loopback through the same listener. IPv6 failure is logged, not fatal, for
+// environments with IPv6 disabled; IPv4 must always work.
+func TestDualStackListenDial(t *testing.T) {
+	all, err := net.Listen("tcp", ":0")
+	if err != nil {
+		t.Fatalf("dual-stack listen: %v", err)
+	}
+	defer all.Close()
+	go func() {
+		for {
+			c, err := all.Accept()
+			if err != nil {
+				return
+			}
+			_ = c.Close()
+		}
+	}()
+	port := strconv.Itoa(all.Addr().(*net.TCPAddr).Port)
+
+	v4, err := net.Dial("tcp", net.JoinHostPort("127.0.0.1", port))
+	if err != nil {
+		t.Errorf("IPv4 dial failed: %v", err)
+	} else {
+		_ = v4.Close()
+	}
+
+	addr, err := resolveClientAddress(net.JoinHostPort("::1", port), "")
+	if err != nil {
+		t.Fatalf("resolveClientAddress for IPv6: %v", err)
+	}
+	v6, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Logf("IPv6 dial unavailable (environment may lack IPv6): %v", err)
+		return
+	}
+	_ = v6.Close()
 }
 
 func TestResolveConnectionKeyPlaintext(t *testing.T) {

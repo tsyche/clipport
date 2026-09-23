@@ -26,6 +26,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- IPv6 / dual-stack support: the server now binds with `net.Listen("tcp", …)`
+  (was `tcp4`) and clients dial with `net.Dial("tcp", …)`, so IPv6-only or
+  dual-stack LANs can connect. Client addresses accept bracketed
+  (`[fe80::1]:53701`), bare (`::1 -p 53701`), and zone-qualified forms;
+  the printed join command uses `net.JoinHostPort` so IPv6 addresses are
+  bracketed. IPv4 behavior is unchanged.
 - Non-text clipboard content (e.g. an image) no longer floods stderr with
   `exit status 1` every poll: the first read failure in a streak is logged
   with a hint, further failures are suppressed until a read succeeds, and

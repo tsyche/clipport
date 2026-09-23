@@ -46,11 +46,12 @@ Examples:
    clipport -d                                # start a new clipboard with debug output
    clipport 192.168.86.24:53701               # join the clipboard at 192.168.86.24:53701
    clipport 192.168.86.24 -p 53701            # same as above, host and port given separately
+   clipport [fe80::1]:53701                   # join via IPv6 (bracketed form; bare ::1 -p 53701 also works)
    clipport -d --secure 192.168.86.24:53701   # join the clipboard with debug output and enable encryption
     clipport keygen                            # generate a clipport keypair for use with --key
     clipport -k 192.168.86.24:53701            # join using keypair-based encryption instead of a password
     clipport known-hosts                       # list trusted -k peers
-    clipport known-hosts remove 192.168.86.24:53701  # forget a peer (after key rotation)
+    clipport known-hosts remove 192.168.86.24  # forget a peer (after key rotation; peer IDs are host-only)
 Running just ` + "`clipport`" + ` will start a new clipboard.
 It will also provide an address with which you can connect to the same clipboard with another device.
 With --secure, the password is read from the CLIPPORT_SECRET environment variable if set,
@@ -215,19 +216,24 @@ func resolvePassword() []byte {
 
 // resolveClientAddress combines a host (optionally with an embedded port) and
 // an optional -p port into a single dialable address, erroring if both are
-// given but disagree.
+// given but disagree. IPv6 works in every common form: bare ("::1"), bracketed
+// ("[::1]"), and bracketed with a port ("[::1]:53701"); output is always
+// bracket-correct via net.JoinHostPort.
 func resolveClientAddress(addr, port string) (string, error) {
 	host, embeddedPort, err := net.SplitHostPort(addr)
 	if err != nil {
 		if port == "" {
 			return "", errors.New("no port specified: use host:port or -p")
 		}
-		return addr + ":" + port, nil
+		// SplitHostPort failed: no embedded port. Accept bracketed bare
+		// IPv6 ("[::1]") as well as plain hosts before joining.
+		bare := strings.TrimSuffix(strings.TrimPrefix(addr, "["), "]")
+		return net.JoinHostPort(bare, port), nil
 	}
 	if port != "" && port != embeddedPort {
 		return "", fmt.Errorf("conflicting ports: %s in address vs -p %s", embeddedPort, port)
 	}
-	return host + ":" + embeddedPort, nil
+	return net.JoinHostPort(host, embeddedPort), nil
 }
 
 // confirmPlaintext warns the user that no encryption was requested and asks
@@ -517,7 +523,7 @@ func makeServer(port string) {
 	if port != "" {
 		listenAddr = ":" + port
 	}
-	l, err := net.Listen("tcp4", listenAddr) //nolint // complains about binding to all interfaces
+	l, err := net.Listen("tcp", listenAddr) //nolint // dual-stack: binds IPv4 and IPv6 where the OS allows it
 	if err != nil {
 		handleError(err)
 		return
@@ -533,7 +539,7 @@ func makeServer(port string) {
 		fmt.Println("\nShutting down — connected devices will be notified.")
 		os.Exit(0)
 	}()
-	fmt.Println("Run", "`clipport", getOutboundIP().String()+":"+port+"`", "to join this clipboard")
+	fmt.Println("Run", "`clipport", net.JoinHostPort(getOutboundIP().String(), port)+"`", "to join this clipboard")
 	fmt.Println()
 	for {
 		c, err := l.Accept()
@@ -649,7 +655,7 @@ func nextBackoff(cur, max time.Duration) time.Duration {
 // permanent -k key mismatch); reached is true if a session was established
 // (used to reset reconnect backoff).
 func connectOnce(address string) (retry, reached bool) {
-	c, err := net.Dial("tcp4", address)
+	c, err := net.Dial("tcp", address) // dual-stack: resolver tries IPv6 and IPv4 addresses
 	if c == nil {
 		handleError(err)
 		fmt.Println("Could not connect to", address)

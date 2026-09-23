@@ -4,12 +4,12 @@ Inferred from the codebase on 2026-06-16 (no prior ROADMAP.md existed); audited 
 
 ## Top 3 Suggested Tasks
 
-1. **IPv6 / dual-stack support** — ~1-2 hours
-   - Server binds with `net.Listen("tcp4", …)` and clients dial with `net.Dial("tcp4", …)`; IPv6-only (or dual-stack-preferred) LANs cannot connect at all. Switch to `tcp` (or dual listeners), accept bracketed `[addr]:port` form, and keep IPv4 behavior working.
-2. **`CLIPPORT_DIR` env override** — ~30-60 minutes
+1. **`CLIPPORT_DIR` env override** — ~30-60 minutes
    - `clipportDir()` hardcodes `~/.clipport`; tests already patch `HOME`/`USERPROFILE` to work around it. An env var (and optional flag) pointing at an alternate state directory helps containers, CI, multi-profile setups, and makes TOFU tests cleaner.
-3. **Quiet / log-level flags** — ~1 hour
+2. **Quiet / log-level flags** — ~1 hour
    - Connect, trust, reconnect, and shutdown messages all print unconditionally; there is no way to run headless (launchd/systemd) with errors-only output, nor a `-v` mode that dumps monitor/poll debug. Add `--quiet` (errors only) and/or verbose debug beyond the existing `-d`.
+3. **`clipport status` / peers subcommand** — ~1 hour
+   - The server only prints a one-line trust/fingerprint message when each peer connects; there is no on-demand way to list currently connected clients, their peer IDs, or when clipboard content last changed. A `status` (or `peers`) subcommand — local IPC or a tiny query path on the existing port — would make multi-device setups debuggable without attaching a debugger.
 
 ## Inherited from upstream (quackduck/uniclip) — triaged 2026-06-16
 
@@ -41,11 +41,9 @@ Lower priority / not clearly actionable yet:
    - 🧑 needs-human: scope decision — images only, images+files, or full multi-format MIME
 2. **CLI security model section** — ~1 hour
    - Plaintext vs `-s` (scrypt password) vs `-k` (X25519 TOFU) have scattered explanations across install docs and CLI prompts. A single "Security model" section spelling out the threat each mode addresses (and what plaintext does _not_ protect) would set expectations before someone pastes secrets over a LAN.
-3. **`clipport status` / peers subcommand** — ~1 hour
-   - The server only prints a one-line trust/fingerprint message when each peer connects; there is no on-demand way to list currently connected clients, their peer IDs, or when clipboard content last changed. A `status` (or `peers`) subcommand — local IPC or a tiny query path on the existing port — would make multi-device setups debuggable without attaching a debugger.
-4. **Max-clients / connection cap on server** — ~30-60 minutes
+3. **Max-clients / connection cap on server** — ~30-60 minutes
    - Plaintext mode already warns and requires confirmation before joining, but the server never bounds how many peers attach; anyone who can reach the port can keep connecting. A `--max-clients N` flag (sensible default, e.g. 8) limits accidental exposure and log noise without adding real auth — pairs with the plaintext-transport-security backlog item as a stopgap, not a replacement.
-5. **Clipboard change debounce / coalesce** — ~1 hour
+4. **Clipboard change debounce / coalesce** — ~1 hour
    - `MonitorLocalClip` polls and sends on every observed change; rapid multi-line edits or a large terminal dump can put many frames on the wire before the receiver pastes. Debouncing (e.g. 100–300ms quiet window, send only the latest snapshot) cuts churn and avoids peers receiving intermediate states they never see locally.
 
 ## Remote Connectivity (Cross-Network)
@@ -97,3 +95,4 @@ Security constraint: remote mode must require `-k`; clear error message if attem
 - 2026-09-23: shipped error-spam dedupe (uniclip#23) and Wayland-first backend pick (uniclip#26).
 - 2026-09-23 audit: migrated Inherited #1–#3 (all shipped) out of active roadmap; removed shipped test-coverage backlog line; promoted known-hosts / backoff / permanent-vs-transient to Top 3; approved nine new suggestions (multi-OS CI, security-model docs, image clipboard [needs scope decision], IPv6, CLIPPORT_DIR, quiet/log-level, status/peers, max-clients, debounce).
 - 2026-09-23: shipped known-hosts subcommand, reconnect backoff + permanent -k mismatch stop, and multi-OS CI matrix (old Top 3). New Top 3: IPv6, CLIPPORT_DIR, quiet/log-level.
+- 2026-09-23: shipped IPv6 / dual-stack support (Top 3 #1): listen/dial switched `tcp4` → `tcp`, `resolveClientAddress` accepts bracketed/bare/zone IPv6 via `net.JoinHostPort`, printed join command bracketed. New Top 3: CLIPPORT_DIR, quiet/log-level, status/peers.

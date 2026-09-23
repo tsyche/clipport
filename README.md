@@ -41,11 +41,12 @@ Examples:
    clipport -d                                # start a new clipboard with debug output
    clipport 192.168.86.24:53701               # join the clipboard at 192.168.86.24:53701
    clipport 192.168.86.24 -p 53701            # same as above, host and port given separately
+   clipport [fe80::1]:53701                   # join via IPv6 (bracketed form; bare ::1 -p 53701 also works)
    clipport -d --secure 192.168.86.24:53701   # join the clipboard with debug output and enable encryption
    clipport keygen                            # generate a clipport keypair for use with --key
    clipport -k 192.168.86.24:53701            # join using keypair-based encryption instead of a password
    clipport known-hosts                       # list trusted -k peers
-   clipport known-hosts remove 192.168.86.24:53701  # forget a peer (after key rotation)
+   clipport known-hosts remove 192.168.86.24  # forget a peer (after key rotation; peer IDs are host-only)
 Running just `clipport` will start a new clipboard.
 It will also provide an address with which you can connect to the same clipboard with another device.
 ```
