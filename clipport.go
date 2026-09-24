@@ -667,18 +667,16 @@ func runStatus() {
 		os.Exit(1)
 	}
 	fmt.Printf("clipport server running (pid %d, port %s)\n", st.Pid, st.Port)
-	if len(st.Clients) == 0 {
+	switch {
+	case len(st.Clients) == 0:
 		fmt.Println("Clients (0): none connected")
-	} else if st.MaxClients > 0 {
+	case st.MaxClients > 0:
 		fmt.Printf("Clients (%d/%d):\n", len(st.Clients), st.MaxClients)
-		for _, addr := range st.Clients {
-			fmt.Printf("  %s\n", addr)
-		}
-	} else {
+	default:
 		fmt.Printf("Clients (%d):\n", len(st.Clients))
-		for _, addr := range st.Clients {
-			fmt.Printf("  %s\n", addr)
-		}
+	}
+	for _, addr := range st.Clients {
+		fmt.Printf("  %s\n", addr)
 	}
 	if st.LastClipPush == 0 {
 		fmt.Println("Clipboard last pushed: never")

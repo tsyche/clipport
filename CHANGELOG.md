@@ -8,13 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- README "Security model" section: per-mode threat coverage for
+- Readme "Security model" section: per-mode threat coverage for
   plaintext vs `-s` (scrypt password) vs `-k` (X25519 TOFU), including
   what plaintext does not protect and the limits of trust-on-first-use.
 - `--max-clients N`: caps concurrent server connections (default 8,
   0 = unlimited). Overflow peers are closed with a server-side log
   line; pending handshakes count against the cap too. `clipport
-  status` shows the limit as `Clients (n/max)`.
+status` shows the limit as `Clients (n/max)`.
 
 ### Changed
 

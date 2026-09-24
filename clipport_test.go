@@ -428,7 +428,8 @@ func TestCurrentStatusSnapshot(t *testing.T) {
 func TestTryReserveClientSlotEnforcesCap(t *testing.T) {
 	preserveGlobals(t)
 	maxClients, activeConns = 2, 0
-	if !tryReserveClientSlot() || !tryReserveClientSlot() {
+	first, second := tryReserveClientSlot(), tryReserveClientSlot()
+	if !first || !second {
 		t.Fatal("first two reservations should succeed")
 	}
 	if tryReserveClientSlot() {
