@@ -26,8 +26,28 @@
 - [x] 2026-09-23 — Sleep/wake dead-peer recovery (wake gap → instant redial)
 - [x] 2026-09-24 — CI fuzz job (`FuzzMonitorSentClips`, 60s loop)
 - [x] 2026-09-24 — PNG/JPEG image clipboard sync
+- [x] 2026-09-24 — Local lint parity script (`just lintci`)
 
 ## Archived entries
+
+### 2026-09-24 — Local lint parity script (`just lintci`)
+
+1. **Local lint parity script** — ~1 hour
+   - The local machine lacks golangci-lint / prettier / textlint in PATH, so super-linter is the first line of defense
+     and CI failures cost a full push-wait cycle (three consecutive red lint runs in the 2026-09-24 session alone). A
+     `just lintci` (or setup addition) installing pinned versions matching CI would catch GO/PRETTIER/textlint
+     categories before push.
+
+Shipped: `just lintci` reproduces super-linter v7.1.0 locally with pinned
+versions — golangci-lint 1.60.3 (cached binary install, `GOTOOLCHAIN=go1.23.12`
+because 1.60.3 cannot read newer export data), prettier 3.3.3, markdownlint-cli
+0.41.0, textlint 14.2.0 (+ `textlint-rule-terminology`,
+`textlint-filter-rule-comments`). Added `.golangci.yml` and `.textlintrc.json`
+matching super-linter's TEMPLATES so config is identical on both sides;
+lintci's prettier globs also cover `*.json` and `.github` yml/json (the
+JSON_PRETTIER category that caught the first attempt). Documented in
+`AGENTS.md`/`CLAUDE.md`/`CONTRIBUTING.md`. Verified green locally and in CI.
+Commits: `2293434`, `5a076d1`.
 
 ### 2026-09-24 — PNG/JPEG image clipboard sync
 

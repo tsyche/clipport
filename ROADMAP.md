@@ -10,16 +10,15 @@ Inferred from the codebase on 2026-06-16 (no prior ROADMAP.md existed); audited 
      write-dead/stale clients promptly on server resume — without closing live connections, which would deliver a clean
      EOF that healthy clients treat as server shutdown and exit (the failure mode deliberately avoided in the shipped
      sleep/wake work).
-2. **Local lint parity script** — ~1 hour
-   - The local machine lacks golangci-lint / prettier / textlint in PATH, so super-linter is the first line of defense
-     and CI failures cost a full push-wait cycle (three consecutive red lint runs in the 2026-09-24 session alone). A
-     `just lintci` (or setup addition) installing pinned versions matching CI would catch GO/PRETTIER/textlint
-     categories before push.
-3. **Oversize-image graceful degradation** — ~1 hour
+2. **Oversize-image graceful degradation** — ~1 hour
    - A screenshot PNG over the 8 MiB frame cap (`maxClipboardFrameBytes`) fails in `sendClipboard`, which breaks that
      client's connection instead of skipping the frame; peers then reconnect and may loop on the same image. Downscale/
      re-encode to fit (or skip with a single log line) so huge captures never drop the link. Follow-on from shipped
      image clipboard support.
+3. **Show own key fingerprint** — ~30 minutes
+   - The security model tells users to verify fingerprints out of band, but after `clipport keygen` there is no way to
+     re-print _your own_ fingerprint (`known-hosts list` shows trusted peers only). A `clipport key fingerprint` (or a
+     line in `clipport status`) closes the TOFU verification loop. Promoted from 2026-09-24 suggestions.
 
 ## Inherited from upstream (quackduck/uniclip) — triaged 2026-06-16
 
@@ -41,7 +40,7 @@ Lower priority / not clearly actionable yet:
 1. **End-to-end loopback integration test** — ~2 hours
    - Unit tests cover monitors, handshake, and cleanup in isolation, but nothing exercises `makeServer` ↔ `ConnectToServer` over a real loopback socket end-to-end: startup snapshot sync, clipboard change propagation, and Ctrl+C/FIN shutdown semantics. An in-process end-to-end test would lock the full path down.
 2. **Show own key fingerprint** — ~30 minutes
-   - The security model tells users to verify fingerprints out of band, but after `clipport keygen` there is no way to re-print _your own_ fingerprint (`known-hosts list` shows trusted peers only). A `clipport key fingerprint` (or a line in `clipport status`) closes the TOFU verification loop.
+   - The security model tells users to verify fingerprints out of band, but after `clipport keygen` there is no way to re-print _your own_ fingerprint (`known-hosts list` shows trusted peers only). A `clipport key fingerprint` (or a line in `clipport status`) closes the TOFU verification loop. _(Promoted to Top 3.)_
 3. **Headless plaintext opt-in** — ~30 minutes
    - `--quiet` is aimed at launchd/systemd, but plaintext mode still blocks on an interactive `Continue? [y/N]` prompt. An explicit `CLIPPORT_ALLOW_PLAINTEXT=1` env opt-in would let scripted plaintext deployments start unattended without weakening the default gate.
 4. **Fuzz-failure artifact upload** — ~20 minutes
@@ -113,3 +112,4 @@ Security constraint: remote mode must require `-k`; clear error message if attem
 - 2026-09-24: shipped sleep/wake dead-peer recovery (Top 3 #1: client wake-gap → instant redial, server 10s disconnect grace). New Top 3: fuzz CI wiring, image clipboard 🧑 scope decision, server wake slot pruning (promoted from new suggestions). Approved two more new suggestions (local lint parity, end-to-end loopback test).
 - 2026-09-24: shipped fuzz CI wiring (Top 3 #1: 60s `FuzzMonitorSentClips` job + `just fuzz`). New Top 3: image clipboard 🧑 scope decision, server wake slot pruning, local lint parity (promoted). Approved three new suggestions (own-key fingerprint, headless plaintext opt-in, fuzz-failure artifact upload); end-to-end loopback test stays in suggestions.
 - 2026-09-24 audit: shipped image clipboard (Top 3 #1, scope decided images-only PNG/JPEG — moved to ledger). Promoted oversize-image graceful degradation to Top 3 #3 (regression risk from shipped images: >8 MiB frames drop the sender link). Approved three new suggestions (GIF/BMP/WebP formats, status payload kind, file-path sync 🧑).
+- 2026-09-24 audit: shipped local lint parity (Top 3 #2: `just lintci` + super-linter-matching configs, commits `2293434`/`5a076d1`). Promoted own-key fingerprint from 2026-09-24 suggestions. New Top 3: server wake pruning, oversize-image degradation, own-key fingerprint — all agent-doable. No new suggestions.
