@@ -786,6 +786,45 @@ func TestLoadKeypairMissing(t *testing.T) {
 	}
 }
 
+func TestOwnFingerprintMatchesKeygen(t *testing.T) {
+	preserveGlobals(t)
+	setTestHome(t)
+	dir, err := clipportDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, pub, err := generateKeypair(dir)
+	if err != nil {
+		t.Fatalf("generateKeypair: %v", err)
+	}
+
+	fp, err := ownFingerprint()
+	if err != nil {
+		t.Fatalf("ownFingerprint: %v", err)
+	}
+	if fp != fingerprint(pub) {
+		t.Errorf("ownFingerprint() = %q, want keygen's %q", fp, fingerprint(pub))
+	}
+}
+
+func TestOwnFingerprintMissingKey(t *testing.T) {
+	preserveGlobals(t)
+	setTestHome(t)
+	if _, err := ownFingerprint(); err == nil {
+		t.Fatal("expected error when no key exists")
+	} else if !strings.Contains(err.Error(), "keygen") {
+		t.Errorf("error should point at keygen, got: %v", err)
+	}
+}
+
+func TestRunKeyCommandUsageErrors(t *testing.T) {
+	for _, args := range [][]string{nil, {"bogus"}, {"fingerprint", "extra"}} {
+		if err := runKeyCommand(args); err == nil || !strings.Contains(err.Error(), "usage: clipport key fingerprint") {
+			t.Errorf("runKeyCommand(%v) = %v, want usage error", args, err)
+		}
+	}
+}
+
 func TestMonitorLocalClipSendsAndStops(t *testing.T) {
 	preserveGlobals(t)
 	secondsBetweenChecksForClipChange = 1

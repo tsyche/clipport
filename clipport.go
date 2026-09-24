@@ -46,6 +46,7 @@ With Clipport, you can copy from one device and paste on another.
 
 Usage: clipport [--port/-p] [--secure/-s] [--key/-k] [--debug/-d] [--quiet/-q] [--max-clients N] [ <address> | --help/-h ]
        clipport keygen
+       clipport key fingerprint
        clipport known-hosts [list|remove <peer>]
        clipport status
 Examples:
@@ -56,8 +57,9 @@ Examples:
    clipport 192.168.86.24 -p 53701            # same as above, host and port given separately
    clipport [fe80::1]:53701                   # join via IPv6 (bracketed form; bare ::1 -p 53701 also works)
    clipport -d --secure 192.168.86.24:53701   # join the clipboard with debug output and enable encryption
-    clipport keygen                            # generate a clipport keypair for use with --key
-    clipport -k 192.168.86.24:53701            # join using keypair-based encryption instead of a password
+     clipport keygen                            # generate a clipport keypair for use with --key
+     clipport key fingerprint                   # re-print this device's key fingerprint (verify out of band)
+     clipport -k 192.168.86.24:53701            # join using keypair-based encryption instead of a password
     clipport known-hosts                       # list trusted -k peers
     clipport known-hosts remove 192.168.86.24  # forget a peer (after key rotation; peer IDs are host-only)
     clipport status                           # list connected clients of the running server
@@ -215,6 +217,13 @@ func main() { //nolint:gocyclo // flag parsing + dispatch; branch count is inher
 	args := flag.Args()
 	if len(args) == 1 && args[0] == "keygen" {
 		runKeygen()
+		return
+	}
+	if len(args) >= 1 && args[0] == "key" {
+		if err := runKeyCommand(args[1:]); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
 		return
 	}
 	if len(args) >= 1 && args[0] == "known-hosts" {
@@ -460,6 +469,32 @@ func loadKeypair() (*ecdh.PrivateKey, error) {
 		return nil, err
 	}
 	return ecdh.X25519().NewPrivateKey(raw)
+}
+
+// runKeyCommand implements `clipport key <subcommand>`; currently only
+// `fingerprint`, which re-prints this device's own key fingerprint so users
+// can verify it out of band without regenerating the key (known-hosts list
+// shows trusted peers only, closing half of the TOFU loop).
+func runKeyCommand(args []string) error {
+	if len(args) != 1 || args[0] != "fingerprint" {
+		return errors.New("usage: clipport key fingerprint")
+	}
+	fp, err := ownFingerprint()
+	if err != nil {
+		return err
+	}
+	fmt.Println("Fingerprint:", fp)
+	return nil
+}
+
+// ownFingerprint returns the fingerprint of this device's own keypair —
+// the same value `clipport keygen` printed at generation time.
+func ownFingerprint() (string, error) {
+	priv, err := loadKeypair()
+	if err != nil {
+		return "", err
+	}
+	return fingerprint(priv.PublicKey().Bytes()), nil
 }
 
 // verifyOrTrustPeer implements trust-on-first-connect: the first time a peer

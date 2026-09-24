@@ -36,6 +36,7 @@ With Clipport, you can copy from one device and paste on another.
 
 Usage: clipport [--port/-p] [--secure/-s] [--key/-k] [--debug/-d] [--quiet/-q] [--max-clients N] [ <address> | --help/-h ]
        clipport keygen
+       clipport key fingerprint
        clipport known-hosts [list|remove <peer>]
        clipport status
 Examples:
@@ -47,6 +48,7 @@ Examples:
    clipport [fe80::1]:53701                   # join via IPv6 (bracketed form; bare ::1 -p 53701 also works)
    clipport -d --secure 192.168.86.24:53701   # join the clipboard with debug output and enable encryption
     clipport keygen                            # generate a clipport keypair for use with --key
+    clipport key fingerprint                   # re-print this device's key fingerprint (verify out of band)
     clipport -k 192.168.86.24:53701            # join using keypair-based encryption instead of a password
     clipport known-hosts                       # list trusted -k peers
     clipport known-hosts remove 192.168.86.24  # forget a peer (after key rotation; peer IDs are host-only)
@@ -112,7 +114,9 @@ access control of its own — what each mode protects against:
   proceeding, which blocks both eavesdropping/injection and peer
   impersonation. First contact still trusts whatever key answers — the same
   caveat as first-time SSH — so verify fingerprints out of band if your threat
-  model includes an active attacker from the very first connect.
+  model includes an active attacker from the very first connect. Each device
+  can print its own fingerprint with `clipport key fingerprint` (the same
+  value `clipport keygen` showed when the key was created).
 
 No mode protects against a compromised device: anything with your user
 account can read the OS clipboard directly. Don't expose the listen port to
