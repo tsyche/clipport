@@ -1229,7 +1229,7 @@ func runGetClipCommand() string {
 	var cmd *exec.Cmd
 
 	switch runtime.GOOS {
-	case "darwin":
+	case osDarwin:
 		cmd = exec.Command("pbpaste")
 	case "windows": //nolint // complains about literal string "windows" being used multiple times
 		cmd = exec.Command("powershell.exe", "-command", "Get-Clipboard")
@@ -1339,6 +1339,15 @@ var (
 	jpegMagic = []byte{0xFF, 0xD8, 0xFF}
 )
 
+// Image payload format tags (shared literals for goconst).
+const (
+	formatPNG  = "png"
+	formatJPEG = "jpeg"
+)
+
+// osDarwin is runtime.GOOS for macOS (constant for goconst).
+const osDarwin = "darwin"
+
 // isImagePayload reports whether s carries a PNG or JPEG blob rather than
 // text. Receiver-side sniffing keeps the wire format unchanged: frames are
 // still gob-encoded []byte, and only these magic prefixes route to the image
@@ -1353,7 +1362,7 @@ func imagePayloadFormat(s string) string {
 		return "png"
 	}
 	if len(b) >= len(jpegMagic) && bytes.Equal(b[:len(jpegMagic)], jpegMagic) {
-		return "jpeg"
+		return formatJPEG
 	}
 	return ""
 }
@@ -1394,7 +1403,7 @@ var writeImageClip = writeLocalImage
 
 func writeLocalImage(b []byte) error {
 	switch runtime.GOOS {
-	case "darwin":
+	case osDarwin:
 		return setDarwinImage(b)
 	case "windows": //nolint // literal "windows" used elsewhere too
 		return setWindowsImage(b)
@@ -1408,7 +1417,7 @@ func writeLocalImage(b []byte) error {
 // large screenshots, file-based `read` does not.
 func setDarwinImage(b []byte) error {
 	class, ext := "PNGf", "png"
-	if imagePayloadFormat(string(b)) == "jpeg" {
+	if imagePayloadFormat(string(b)) == formatJPEG {
 		class, ext = "JPEGf", "jpg"
 	}
 	f, err := os.CreateTemp("", "clipport-*."+ext)
@@ -1450,7 +1459,7 @@ $img = [System.Drawing.Image]::FromStream($ms)
 // explicit image MIME type.
 func setLinuxImage(b []byte) error {
 	mime := "image/png"
-	if imagePayloadFormat(string(b)) == "jpeg" {
+	if imagePayloadFormat(string(b)) == formatJPEG {
 		mime = "image/jpeg"
 	}
 	wayland := os.Getenv("WAYLAND_DISPLAY") != ""
@@ -1466,7 +1475,7 @@ func setLinuxImage(b []byte) error {
 		tools = append(tools, tool{"xclip", []string{"-in", "-selection", "clipboard", "-t", mime}})
 		tools = append(tools, tool{"wl-copy", []string{"--type", mime}})
 	}
-	var lastErr error = errors.New("no image clipboard tool found (install xclip or wl-clipboard)")
+	lastErr := errors.New("no image clipboard tool found (install xclip or wl-clipboard)")
 	for _, t := range tools {
 		if _, err := exec.LookPath(t.name); err != nil {
 			continue
@@ -1474,11 +1483,11 @@ func setLinuxImage(b []byte) error {
 		// #nosec G204 -- t.name is from the fixed allowlist above, not user input
 		cmd := exec.Command(t.name, t.args...)
 		cmd.Stdin = bytes.NewReader(b)
-		if err := cmd.Run(); err == nil {
+		err := cmd.Run()
+		if err == nil {
 			return nil
-		} else {
-			lastErr = err
 		}
+		lastErr = err
 	}
 	return lastErr
 }
@@ -1487,7 +1496,7 @@ func setLinuxImage(b []byte) error {
 // clipboard holds no image the platform tools can read.
 func readLocalImage() ([]byte, error) {
 	switch runtime.GOOS {
-	case "darwin":
+	case osDarwin:
 		if b, err := readOsascriptImage("PNGf"); err == nil {
 			return b, nil
 		}
@@ -1500,6 +1509,7 @@ func readLocalImage() ([]byte, error) {
 }
 
 func readOsascriptImage(class string) ([]byte, error) {
+	// #nosec G204 -- class is a fixed internal token ("PNGf"/"JPEGf"), not user input
 	out, err := exec.Command("osascript", "-e", "the clipboard as «class "+class+"»").Output()
 	if err != nil {
 		return nil, err
@@ -1597,7 +1607,7 @@ func runSetClipCommand(s string) {
 	var copyCmd *exec.Cmd
 	var err error
 	switch runtime.GOOS {
-	case "darwin":
+	case osDarwin:
 		copyCmd = exec.Command("pbcopy")
 	case "windows":
 		copyCmd = exec.Command("clip")
