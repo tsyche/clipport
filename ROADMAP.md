@@ -4,19 +4,19 @@ Inferred from the codebase on 2026-06-16 (no prior ROADMAP.md existed); audited 
 
 ## Top 3 Suggested Tasks
 
-1. **Show own key fingerprint** — ~30 minutes
-   - The security model tells users to verify fingerprints out of band, but after `clipport keygen` there is no way to
-     re-print _your own_ fingerprint (`known-hosts list` shows trusted peers only). A `clipport key fingerprint` (or a
-     line in `clipport status`) closes the TOFU verification loop. Promoted from 2026-09-24 suggestions.
-2. **End-to-end loopback integration test** — ~2 hours
+1. **End-to-end loopback integration test** — ~2 hours
    - Unit tests cover monitors, handshake, and cleanup in isolation, but nothing exercises `makeServer` ↔
      `ConnectToServer` over a real loopback socket end-to-end: startup snapshot sync, clipboard change propagation, and
      Ctrl+C/FIN shutdown semantics. An in-process end-to-end test would lock the full path down. Promoted from
      2026-09-24 suggestions — worth locking down after today's image/oversize churn.
-3. **Headless plaintext opt-in** — ~30 minutes
+2. **Headless plaintext opt-in** — ~30 minutes
    - `--quiet` is aimed at launchd/systemd, but plaintext mode still blocks on an interactive `Continue? [y/N]` prompt.
      An explicit `CLIPPORT_ALLOW_PLAINTEXT=1` env opt-in would let scripted plaintext deployments start unattended
      without weakening the default gate. _(Promoted to Top 3.)_
+3. **Prune on full before rejecting** — ~20 minutes
+   - When a joiner hits "server full", run one stale-probe pass first: write-dead slots (e.g. a peer that never came
+     back after a previous wake) free immediately, so healthy peers rarely get rejected. Follow-on from shipped server
+     wake pruning. _(Promoted to Top 3.)_
 
 ## New Suggestions (2026-07-02)
 
@@ -42,9 +42,11 @@ Inferred from the codebase on 2026-06-16 (no prior ROADMAP.md existed); audited 
    - Copying a file in Finder/Explorer puts a path/URI on the clipboard, not bytes; sync the path text so the peer pastes a usable location (same-machine paths aside).
    - 🧑 needs-human: scope decision — what a cross-OS path should paste as (POSIX vs Windows path, or an error)
 8. **Prune on full before rejecting** — ~20 minutes
-   - When a joiner hits "server full", run one stale-probe pass first: write-dead slots (e.g. a peer that never came back after a previous wake) free immediately, so healthy peers rarely get rejected. Follow-on from shipped server wake pruning.
+   - When a joiner hits "server full", run one stale-probe pass first: write-dead slots (e.g. a peer that never came back after a previous wake) free immediately, so healthy peers rarely get rejected. Follow-on from shipped server wake pruning. _(Promoted to Top 3.)_
 9. **Stale-prune count in `clipport status`** — ~20 minutes
    - Wake pruning only logs at debug level; surface a closed-by-prune counter in the status snapshot so users can see that slots were reclaimed. Follow-on from shipped server wake pruning.
+10. **`clipport key rotate` helper** — ~20 minutes
+    - `keygen` refuses to overwrite an existing key, so rotating today means manually removing `~/.clipport/key`; a `clipport key rotate` subcommand would regenerate safely and remind the user to re-verify fingerprints with peers. Follow-on from shipped own-key fingerprint work.
 
 ## Remote Connectivity (Cross-Network)
 
@@ -110,3 +112,4 @@ Security constraint: remote mode must require `-k`; clear error message if attem
 - 2026-09-24 audit: shipped oversize-frame graceful degradation (Top 3 #2: `sendFrame` shrink-or-skip, commits `cc2bbff`/`2518c9a` — moved to ledger). Promoted end-to-end loopback test from 2026-09-24 suggestions. New Top 3: server wake pruning, own-key fingerprint, end-to-end loopback — all agent-doable. No new suggestions.
 - 2026-09-24 audit: shipped server wake stale-slot pruning (Top 3 #1: `watchServerWake` + `pruneStaleClients` empty-frame probe, commit `6b89ca9` — moved to ledger).
   Promoted headless plaintext opt-in from 2026-09-24 suggestions. New Top 3: own-key fingerprint, end-to-end loopback, headless plaintext opt-in — all agent-doable. Approved two new follow-on suggestions (prune-on-full, stale-prune count in status).
+- 2026-09-24 audit: shipped own-key fingerprint (Top 3 #1: `clipport key fingerprint`, commit `7a2be58` — moved to ledger). Promoted prune-on-full from suggestions. New Top 3: end-to-end loopback, headless plaintext, prune-on-full — all agent-doable. Approved one new suggestion (key rotate helper).

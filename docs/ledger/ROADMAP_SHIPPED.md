@@ -30,8 +30,26 @@
 - [x] 2026-09-24 — Inherited upstream triage closed (uniclip#20, uniclip#32)
 - [x] 2026-09-24 — Oversize-frame graceful degradation (shrink or skip, never drop link)
 - [x] 2026-09-24 — Server wake stale-slot pruning (empty-frame probe, write-dead close)
+- [x] 2026-09-24 — `clipport key fingerprint` subcommand (own-key TOFU verification)
 
 ## Archived entries
+
+### 2026-09-24 — `clipport key fingerprint` subcommand
+
+1. **Show own key fingerprint** — ~30 minutes
+   - The security model tells users to verify fingerprints out of band, but after `clipport keygen` there is no way to
+     re-print _your own_ fingerprint (`known-hosts list` shows trusted peers only). A `clipport key fingerprint` (or a
+     line in `clipport status`) closes the TOFU verification loop. Promoted from 2026-09-24 suggestions.
+
+Shipped: `clipport key fingerprint` dispatches through
+`runKeyCommand` → `ownFingerprint`, which loads the device keypair and
+prints `fingerprint(pub)` — byte-identical to what `clipport keygen`
+printed at generation time. Missing key errors with a pointer to
+`clipport keygen` (exit 1); bare/unknown `key` subcommands print usage.
+Documented in CLI help (usage + example) and `README` (usage, example,
+security-model paragraph). Tests: `TestOwnFingerprintMatchesKeygen`,
+`TestOwnFingerprintMissingKey`, `TestRunKeyCommandUsageErrors`.
+Commit: `7a2be58`; Test + Lint + CodeQL green in CI.
 
 ### 2026-09-24 — Server wake stale-slot pruning
 
