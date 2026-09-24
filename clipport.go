@@ -134,6 +134,14 @@ Refer to https://github.com/tsyche/clipport for more information`
 	// the client with nobody to reconnect to.
 	emptyDisconnectGrace = 10 * time.Second
 
+	// Server-side stale-slot pruning (see watchServerWake/pruneStaleClients).
+	// Package vars so tests can shorten the timings.
+	staleProbeTimeout = 3 * time.Second // per-peer write deadline for one probe
+	serverWakePoll    = time.Second     // clock sampling interval on the server
+	serverWakeSettle  = 2 * time.Second // network reassociation wait after wake
+	// pruneStale is what the wake watcher calls; tests stub it to observe runs.
+	pruneStale = pruneStaleClients
+
 	// exitProcess is os.Exit; tests stub it to observe shutdown without
 	// killing the test binary.
 	exitProcess = os.Exit
@@ -166,11 +174,13 @@ func isPermanent(err error) bool {
 }
 
 // client pairs a connected peer's writer with the encryption key negotiated
-// for that specific connection (nil if unencrypted).
+// for that specific connection (nil if unencrypted). conn is the underlying
+// transport so stale-slot pruning can close a write-dead peer directly.
 type client struct {
 	w    *bufio.Writer
 	key  []byte
 	addr string
+	conn net.Conn
 }
 
 func main() { //nolint:gocyclo // flag parsing + dispatch; branch count is inherent to the CLI surface, not a complexity smell
@@ -756,6 +766,7 @@ func makeServer(port string) {
 		port = strconv.Itoa(l.Addr().(*net.TCPAddr).Port)
 	}
 	startStatusServer(port)
+	go watchServerWake(nil)
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
@@ -807,7 +818,7 @@ func HandleClient(c net.Conn) {
 		return
 	}
 	w := bufio.NewWriter(c)
-	cl := &client{w: w, key: key, addr: c.RemoteAddr().String()}
+	cl := &client{w: w, key: key, addr: c.RemoteAddr().String(), conn: c}
 	mu.Lock()
 	listOfClients = append(listOfClients, cl)
 	mu.Unlock()
@@ -865,6 +876,94 @@ func exitIfStillEmptyAfter(d time.Duration) {
 	}
 	info("All devices disconnected. Exiting.")
 	exitProcess(0)
+}
+
+// watchServerWake samples the wall clock on the server; a gap ≥
+// wakeGapThreshold means the server machine suspended (same technique
+// client-side wake detection uses). After a short settle for the network to
+// reassociate, it probes peers and closes write-dead ones so their
+// --max-clients slots free promptly instead of waiting out TCP keepalive
+// (minutes) while a returning peer is rejected as "server full". stop is nil
+// in production (runs for process lifetime); tests close it to join the
+// goroutine before restoring stubbed globals.
+func watchServerWake(stop <-chan struct{}) {
+	last := clockNow()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-time.After(serverWakePoll):
+		}
+		now := clockNow()
+		if now.Sub(last) >= wakeGapThreshold {
+			debug("server resume detected (poll gap", now.Sub(last), "); probing for stale clients")
+			time.Sleep(serverWakeSettle)
+			pruneStale()
+			last = clockNow()
+		} else {
+			last = now
+		}
+	}
+}
+
+// pruneStaleClients probes every listed peer and closes the write-dead ones.
+// Closing a dead conn unblocks HandleClient, whose existing cleanup removes
+// the list entry and releases the slot. Live peers are never closed: a clean
+// EOF there would make healthy clients exit (they treat it as server
+// shutdown — the failure mode the shipped sleep/wake work deliberately
+// avoided on the server side).
+func pruneStaleClients() {
+	mu.Lock()
+	targets := make([]*client, len(listOfClients))
+	copy(targets, listOfClients)
+	mu.Unlock()
+	for _, cl := range targets {
+		if cl == nil || cl.conn == nil {
+			continue
+		}
+		if !probeClient(cl) {
+			debug("pruning write-dead client", cl.addr)
+			_ = cl.conn.Close()
+		}
+	}
+}
+
+// probeClient sends one empty clipboard frame to cl under staleProbeTimeout —
+// a frame receivers already discard (MonitorSentClips drops empty payloads),
+// so the probe is invisible to healthy peers. Returns false when the write
+// fails, meaning the connection is dead (typical right after server resume,
+// before TCP keepalive would notice). Returns true — skipping the probe — if
+// cl is no longer listed or the deadline cannot be armed (probing without a
+// deadline could block the shared write path). Runs under mu so the probe
+// cannot interleave with other writes to the same bufio.Writer.
+func probeClient(cl *client) bool {
+	mu.Lock()
+	defer mu.Unlock()
+	if !clientListed(cl) {
+		return true
+	}
+	if err := cl.conn.SetWriteDeadline(clockNow().Add(staleProbeTimeout)); err != nil {
+		debug("skipping stale probe for", cl.addr, ":", err)
+		return true
+	}
+	err := sendClipboard(cl.w, "", cl.key)
+	_ = cl.conn.SetWriteDeadline(time.Time{}) //nolint:errcheck // best-effort: clearing the deadline; a failed clear only leaves the (already finished) probe deadline in place
+	if err != nil {
+		debug("stale probe failed for", cl.addr, ":", err)
+		return false
+	}
+	return true
+}
+
+// clientListed reports whether target is still in listOfClients. Callers must
+// hold mu.
+func clientListed(target *client) bool {
+	for _, cl := range listOfClients {
+		if cl == target {
+			return true
+		}
+	}
+	return false
 }
 
 // Connect to the server (which starts a new clipboard), reconnecting
@@ -1000,19 +1099,25 @@ func monitorLocalClip(w *bufio.Writer, key []byte, stop <-chan struct{}, checkWa
 		mu.Lock()
 		localClipboard = getLocalClip()
 		cur := localClipboard
+		// Send under mu: writes to any client-facing bufio.Writer must be
+		// serialized with pruneStaleClients' probes (and with broadcast writes
+		// in MonitorSentClips), or a probe write deadline could abort a live
+		// clipboard send mid-frame.
+		var sendErr error
+		if cur != "" {
+			if sendErr = sendFrame(w, cur, key); sendErr == nil {
+				lastClipPush.Store(time.Now().UnixNano())
+			}
+		}
 		mu.Unlock()
 		debug("localClipboard changed. localClipboard =", cur)
 		// localClipboard is already updated above even when cur is empty, so
 		// the change-poll below does not spin while the clipboard stays empty.
-		if cur != "" {
-			err := sendFrame(w, cur, key)
-			if err != nil {
-				if !isNetworkDisconnect(err) {
-					handleError(err)
-				}
-				return
+		if sendErr != nil {
+			if !isNetworkDisconnect(sendErr) {
+				handleError(sendErr)
 			}
-			lastClipPush.Store(time.Now().UnixNano())
+			return
 		}
 		for {
 			var iterStart time.Time

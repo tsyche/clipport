@@ -221,6 +221,9 @@ func preserveGlobals(t *testing.T) {
 	oldGrace := emptyDisconnectGrace
 	oldExit := exitProcess
 	oldWriteImage := writeImageClip
+	oldProbeTimeout := staleProbeTimeout
+	oldWakePoll, oldWakeSettle := serverWakePoll, serverWakeSettle
+	oldPruneStale := pruneStale
 	oversizeFrameReported.Store(false)
 	t.Cleanup(func() {
 		secure, keyMode = oldSecure, oldKeyMode
@@ -240,6 +243,9 @@ func preserveGlobals(t *testing.T) {
 		emptyDisconnectGrace = oldGrace
 		exitProcess = oldExit
 		writeImageClip = oldWriteImage
+		staleProbeTimeout = oldProbeTimeout
+		serverWakePoll, serverWakeSettle = oldWakePoll, oldWakeSettle
+		pruneStale = oldPruneStale
 	})
 }
 
@@ -1691,6 +1697,239 @@ func TestHandleClientCleansUpWithoutExiting(t *testing.T) {
 	}
 	if listOfClients[0].addr != "dummy:0" {
 		t.Errorf("remaining client addr %q, want dummy:0", listOfClients[0].addr)
+	}
+}
+
+// fakeProbeConn is a net.Conn double for stale-prune tests: Write either
+// succeeds instantly or fails with writeErr, Close is recorded. Deadlines
+// always arm so probeClient takes the real write path.
+type fakeProbeConn struct {
+	writeErr error
+	writes   atomic.Int32
+	closed   atomic.Bool
+}
+
+func (f *fakeProbeConn) Read([]byte) (int, error) { return 0, io.EOF }
+func (f *fakeProbeConn) Write(b []byte) (int, error) {
+	if f.writeErr != nil {
+		return 0, f.writeErr
+	}
+	f.writes.Add(1)
+	return len(b), nil
+}
+func (f *fakeProbeConn) Close() error                { f.closed.Store(true); return nil }
+func (f *fakeProbeConn) LocalAddr() net.Addr         { return fakeAddr("local") }
+func (f *fakeProbeConn) RemoteAddr() net.Addr        { return fakeAddr("remote") }
+func (f *fakeProbeConn) SetDeadline(time.Time) error { return nil }
+func (f *fakeProbeConn) SetReadDeadline(time.Time) error {
+	return nil
+}
+func (f *fakeProbeConn) SetWriteDeadline(time.Time) error { return nil }
+
+type fakeAddr string
+
+func (a fakeAddr) Network() string { return "fake" }
+func (a fakeAddr) String() string  { return string(a) }
+
+func TestPruneStaleClientsClosesWriteDeadPeer(t *testing.T) {
+	preserveGlobals(t)
+	dead := &fakeProbeConn{writeErr: errors.New("broken pipe")}
+	mu.Lock()
+	listOfClients = []*client{
+		{w: bufio.NewWriter(dead), addr: "dead:1", conn: dead},
+		{w: bufio.NewWriter(io.Discard), addr: "nilconn:1"},
+	}
+	mu.Unlock()
+
+	pruneStaleClients()
+
+	if !dead.closed.Load() {
+		t.Error("write-dead peer was not closed")
+	}
+	if dead.writes.Load() != 0 {
+		t.Errorf("dead peer recorded %d successful writes, want 0", dead.writes.Load())
+	}
+}
+
+func TestPruneStaleClientsKeepsLivePeer(t *testing.T) {
+	preserveGlobals(t)
+	live := &fakeProbeConn{}
+	mu.Lock()
+	listOfClients = []*client{{w: bufio.NewWriter(live), addr: "live:1", conn: live}}
+	mu.Unlock()
+
+	pruneStaleClients()
+
+	if live.closed.Load() {
+		t.Error("live peer must not be closed by pruning")
+	}
+	if live.writes.Load() == 0 {
+		t.Error("live peer received no probe frame")
+	}
+}
+
+func TestPruneStaleClientsSkipsUnlistedClient(t *testing.T) {
+	preserveGlobals(t)
+	lonely := &fakeProbeConn{}
+	mu.Lock()
+	listOfClients = nil // entry already removed by HandleClient cleanup
+	mu.Unlock()
+
+	prune := probeClient(&client{w: bufio.NewWriter(lonely), addr: "gone:1", conn: lonely})
+
+	if !prune {
+		t.Error("unlisted client must be treated as already gone, not write-dead")
+	}
+	if lonely.writes.Load() != 0 || lonely.closed.Load() {
+		t.Error("unlisted client must not be probed or closed")
+	}
+}
+
+// A live HandleClient absorbs the empty probe frame: the peer stays listed,
+// HandleClient keeps running, and the receiver drops the empty payload.
+func TestPruneStaleClientsLeavesLiveHandleClientRunning(t *testing.T) {
+	preserveGlobals(t)
+	secure, keyMode = false, false
+	stubClipboard(t, func() string { return "server-clip" })
+
+	mu.Lock()
+	listOfClients = nil
+	mu.Unlock()
+
+	ln, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	hcDone := make(chan struct{})
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			close(hcDone)
+			return
+		}
+		HandleClient(c)
+		close(hcDone)
+	}()
+
+	cli, err := net.Dial("tcp4", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Wait for HandleClient to register the client.
+	waitForRegisteredClient(t)
+
+	pruneStaleClients()
+
+	// Probe must not have torn the connection down, and the receiver must
+	// see exactly one empty frame (it may also see the startup snapshot of
+	// "server-clip" — skip non-empty frames).
+	select {
+	case <-hcDone:
+		t.Fatal("HandleClient exited after probing a live peer")
+	case <-time.After(200 * time.Millisecond):
+	}
+	if err := cli.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
+	waitForEmptyFrame(t, cli)
+
+	mu.Lock()
+	still := len(listOfClients) == 1 && listOfClients[0] != nil
+	mu.Unlock()
+	if !still {
+		t.Error("live client was removed from the list by pruning")
+	}
+
+	// Join HandleClient before preserveGlobals restores stubbed globals.
+	_ = cli.Close()
+	select {
+	case <-hcDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("HandleClient did not return after client disconnect")
+	}
+}
+
+// waitForRegisteredClient waits until exactly one live client (with a conn)
+// is listed — i.e. HandleClient finished registration and spawned monitors.
+func waitForRegisteredClient(t *testing.T) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		mu.Lock()
+		registered := len(listOfClients) == 1 && listOfClients[0] != nil && listOfClients[0].conn != nil
+		mu.Unlock()
+		if registered {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("HandleClient did not register the client")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// waitForEmptyFrame reads gob frames from r until an empty payload arrives —
+// the probe frame pruneStaleClients puts on the wire. Non-empty frames (the
+// startup clipboard snapshot) are skipped. One decoder for the whole stream:
+// a fresh gob.Decoder per frame drops bytes the previous decoder buffered.
+func waitForEmptyFrame(t *testing.T, r io.Reader) {
+	t.Helper()
+	dec := gob.NewDecoder(r)
+	for {
+		var payload []byte
+		if err := dec.Decode(&payload); err != nil {
+			t.Fatalf("decoding probe/snapshot frame: %v", err)
+		}
+		if len(payload) == 0 {
+			return
+		}
+	}
+}
+
+// The wake watcher detects a wall-clock gap (suspend/resume) and runs the
+// prune hook once per wake.
+func TestWatchServerWakeTriggersPrune(t *testing.T) {
+	preserveGlobals(t)
+	var prunes atomic.Int32
+	pruneStale = func() { prunes.Add(1) }
+	serverWakePoll = 5 * time.Millisecond
+	serverWakeSettle = 5 * time.Millisecond
+	wakeGapThreshold = time.Millisecond
+
+	// First samples return T so the initial gap check is small; then jump an
+	// hour ahead (suspend). After a prune the watcher re-anchors on the fake
+	// future clock, so no further prunes fire before we stop it.
+	base := time.Now()
+	var samples atomic.Int32
+	clockNow = func() time.Time {
+		if samples.Add(1) <= 2 {
+			return base
+		}
+		return base.Add(time.Hour)
+	}
+
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		watchServerWake(stop)
+		close(done)
+	}()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for prunes.Load() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("watchServerWake never ran prune after a wake gap")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	close(stop)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("watchServerWake did not stop")
 	}
 }
 
