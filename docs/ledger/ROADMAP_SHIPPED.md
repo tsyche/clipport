@@ -28,8 +28,28 @@
 - [x] 2026-09-24 — PNG/JPEG image clipboard sync
 - [x] 2026-09-24 — Local lint parity script (`just lintci`)
 - [x] 2026-09-24 — Inherited upstream triage closed (uniclip#20, uniclip#32)
+- [x] 2026-09-24 — Oversize-frame graceful degradation (shrink or skip, never drop link)
 
 ## Archived entries
+
+### 2026-09-24 — Oversize-frame graceful degradation (shrink or skip, never drop link)
+
+1. **Oversize-image graceful degradation** — ~1 hour
+   - A screenshot PNG over the 8 MiB frame cap (`maxClipboardFrameBytes`) fails in `sendClipboard`, which breaks that
+     client's connection instead of skipping the frame; peers then reconnect and may loop on the same image. Downscale/
+     re-encode to fit (or skip with a single log line) so huge captures never drop the link. Follow-on from shipped
+     image clipboard support.
+
+Shipped: `monitorLocalClip` now sends through `sendFrame` — an oversize
+image is re-encoded on a downscale × JPEG-quality ladder
+(`shrinkImageToFit` + dependency-free `downscaleBox`, with headroom under
+the cap for gob/AES-GCM overhead) and retried; anything still over the cap
+(non-image text, or an image no ladder can fit) is skipped with one warning
+per streak (`oversizeFrameReported` latch, cleared on the next successful
+send) instead of failing the connection. Tests: `TestShrinkImageToFit`,
+`TestSendFrameSkipsOversizeTextWithoutError`, `TestSendFrameShrinksOversizeImage`,
+`TestMonitorLocalClipSurvivesOversizeFrame` (shared `oversizePNG` fixture).
+Commits: `cc2bbff`, CI fixes `2518c9a`; Test + Lint green in CI.
 
 ### 2026-09-24 — Inherited upstream triage closed (uniclip#20, uniclip#32)
 

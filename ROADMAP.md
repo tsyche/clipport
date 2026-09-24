@@ -10,15 +10,15 @@ Inferred from the codebase on 2026-06-16 (no prior ROADMAP.md existed); audited 
      write-dead/stale clients promptly on server resume — without closing live connections, which would deliver a clean
      EOF that healthy clients treat as server shutdown and exit (the failure mode deliberately avoided in the shipped
      sleep/wake work).
-2. **Oversize-image graceful degradation** — ~1 hour
-   - A screenshot PNG over the 8 MiB frame cap (`maxClipboardFrameBytes`) fails in `sendClipboard`, which breaks that
-     client's connection instead of skipping the frame; peers then reconnect and may loop on the same image. Downscale/
-     re-encode to fit (or skip with a single log line) so huge captures never drop the link. Follow-on from shipped
-     image clipboard support.
-3. **Show own key fingerprint** — ~30 minutes
+2. **Show own key fingerprint** — ~30 minutes
    - The security model tells users to verify fingerprints out of band, but after `clipport keygen` there is no way to
      re-print _your own_ fingerprint (`known-hosts list` shows trusted peers only). A `clipport key fingerprint` (or a
      line in `clipport status`) closes the TOFU verification loop. Promoted from 2026-09-24 suggestions.
+3. **End-to-end loopback integration test** — ~2 hours
+   - Unit tests cover monitors, handshake, and cleanup in isolation, but nothing exercises `makeServer` ↔
+     `ConnectToServer` over a real loopback socket end-to-end: startup snapshot sync, clipboard change propagation, and
+     Ctrl+C/FIN shutdown semantics. An in-process end-to-end test would lock the full path down. Promoted from
+     2026-09-24 suggestions — worth locking down after today's image/oversize churn.
 
 ## New Suggestions (2026-07-02)
 
@@ -29,7 +29,7 @@ Inferred from the codebase on 2026-06-16 (no prior ROADMAP.md existed); audited 
 ## New Suggestions (2026-09-24)
 
 1. **End-to-end loopback integration test** — ~2 hours
-   - Unit tests cover monitors, handshake, and cleanup in isolation, but nothing exercises `makeServer` ↔ `ConnectToServer` over a real loopback socket end-to-end: startup snapshot sync, clipboard change propagation, and Ctrl+C/FIN shutdown semantics. An in-process end-to-end test would lock the full path down.
+   - Unit tests cover monitors, handshake, and cleanup in isolation, but nothing exercises `makeServer` ↔ `ConnectToServer` over a real loopback socket end-to-end: startup snapshot sync, clipboard change propagation, and Ctrl+C/FIN shutdown semantics. An in-process end-to-end test would lock the full path down. _(Promoted to Top 3.)_
 2. **Show own key fingerprint** — ~30 minutes
    - The security model tells users to verify fingerprints out of band, but after `clipport keygen` there is no way to re-print _your own_ fingerprint (`known-hosts list` shows trusted peers only). A `clipport key fingerprint` (or a line in `clipport status`) closes the TOFU verification loop. _(Promoted to Top 3.)_
 3. **Headless plaintext opt-in** — ~30 minutes
@@ -105,3 +105,4 @@ Security constraint: remote mode must require `-k`; clear error message if attem
 - 2026-09-24 audit: shipped image clipboard (Top 3 #1, scope decided images-only PNG/JPEG — moved to ledger). Promoted oversize-image graceful degradation to Top 3 #3 (regression risk from shipped images: >8 MiB frames drop the sender link). Approved three new suggestions (GIF/BMP/WebP formats, status payload kind, file-path sync 🧑).
 - 2026-09-24 audit: shipped local lint parity (Top 3 #2: `just lintci` + super-linter-matching configs, commits `2293434`/`5a076d1`). Promoted own-key fingerprint from 2026-09-24 suggestions. New Top 3: server wake pruning, oversize-image degradation, own-key fingerprint — all agent-doable. No new suggestions.
 - 2026-09-24: closed out the last Inherited-from-upstream items (uniclip#20 custom port — already shipped as `-p`/`--port`; uniclip#32 Windows-hibernation disconnect — covered by shipped sleep/wake recovery, reconnect backoff, and `isNetworkDisconnect` handling, not reproducible here). Section removed; both entries archived in the ledger.
+- 2026-09-24 audit: shipped oversize-frame graceful degradation (Top 3 #2: `sendFrame` shrink-or-skip, commits `cc2bbff`/`2518c9a` — moved to ledger). Promoted end-to-end loopback test from 2026-09-24 suggestions. New Top 3: server wake pruning, own-key fingerprint, end-to-end loopback — all agent-doable. No new suggestions.
