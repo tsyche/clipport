@@ -22,15 +22,15 @@
 - [x] 2026-09-23 — `clipport status` subcommand (unix-socket status query)
 - [x] 2026-09-23 — Max-clients cap (`--max-clients`, slot accounting)
 - [x] 2026-09-23 — Clipboard change debounce (250ms quiet window)
-- [x] 2026-09-23 — CLI security model section (README threat coverage)
+- [x] 2026-09-23 — CLI security model section (Readme threat coverage)
 
 ## Archived entries
 
-### 2026-09-23 — CLI security model section (README threat coverage)
+### 2026-09-23 — CLI security model section (Readme threat coverage)
 
 Top 3 item 1. Plaintext vs `-s` (scrypt password) vs `-k` (X25519 TOFU) had scattered explanations across install docs and
 CLI prompts. A single "Security model" section spelling out the threat each mode addresses (and what plaintext does _not_
-protect) sets expectations before someone pastes secrets over a LAN. Shipped as a README `## Security model` section after
+protect) sets expectations before someone pastes secrets over a LAN. Shipped as a Readme `## Security model` section after
 `## Encryption`: per-mode coverage (confidentiality/integrity/identity for each of plaintext, `-s`, `-k`), the TOFU
 first-contact caveat, and the explicit non-goals (compromised local device, no internet exposure). Docs-only — no tests.
 
