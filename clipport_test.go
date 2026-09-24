@@ -7,6 +7,7 @@ import (
 	"encoding/gob"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"image"
 	"image/png"
 	"io"
@@ -1355,32 +1356,47 @@ func TestRunSetClipCommandRoutesImageToWriter(t *testing.T) {
 	}
 }
 
-// makeOversizePNG builds a PNG larger than maxClipboardFrameBytes by encoding
-// high-entropy pixels (poorly compressible).
-func makeOversizePNG(t *testing.T) string {
+// oversizePNG builds (once) a PNG larger than maxClipboardFrameBytes by
+// encoding high-entropy pixels (poorly compressible). Shared across tests —
+// generation is expensive under -race.
+var (
+	oversizePNGOnce sync.Once
+	oversizePNGData string
+	oversizePNGErr  error
+)
+
+func oversizePNG(t *testing.T) string {
 	t.Helper()
-	const side = 2400
-	img := image.NewRGBA(image.Rect(0, 0, side, side))
-	seed := uint32(1)
-	for i := 0; i < len(img.Pix); i += 4 {
-		seed = seed*1664525 + 1013904223
-		img.Pix[i] = byte(seed >> 24)
-		img.Pix[i+1] = byte(seed >> 16)
-		img.Pix[i+2] = byte(seed >> 8)
-		img.Pix[i+3] = 255
+	oversizePNGOnce.Do(func() {
+		const side = 2000
+		img := image.NewRGBA(image.Rect(0, 0, side, side))
+		seed := uint32(1)
+		for i := 0; i < len(img.Pix); i += 4 {
+			seed = seed*1664525 + 1013904223
+			img.Pix[i] = byte(seed >> 24)
+			img.Pix[i+1] = byte(seed >> 16)
+			img.Pix[i+2] = byte(seed >> 8)
+			img.Pix[i+3] = 255
+		}
+		var buf bytes.Buffer
+		if err := png.Encode(&buf, img); err != nil {
+			oversizePNGErr = err
+			return
+		}
+		if buf.Len() <= maxClipboardFrameBytes {
+			oversizePNGErr = fmt.Errorf("fixture not oversize: %d <= %d", buf.Len(), maxClipboardFrameBytes)
+			return
+		}
+		oversizePNGData = buf.String()
+	})
+	if oversizePNGErr != nil {
+		t.Fatalf("oversize fixture: %v", oversizePNGErr)
 	}
-	var buf bytes.Buffer
-	if err := png.Encode(&buf, img); err != nil {
-		t.Fatalf("encode oversize fixture: %v", err)
-	}
-	if buf.Len() <= maxClipboardFrameBytes {
-		t.Fatalf("fixture not oversize: %d <= %d", buf.Len(), maxClipboardFrameBytes)
-	}
-	return buf.String()
+	return oversizePNGData
 }
 
 func TestShrinkImageToFit(t *testing.T) {
-	oversize := makeOversizePNG(t)
+	oversize := oversizePNG(t)
 	shrunk, err := shrinkImageToFit(oversize)
 	if err != nil {
 		t.Fatalf("shrink: %v", err)
@@ -1422,7 +1438,7 @@ func TestSendFrameShrinksOversizeImage(t *testing.T) {
 	preserveGlobals(t)
 	var buf bytes.Buffer
 	w := bufio.NewWriter(&buf)
-	oversize := makeOversizePNG(t)
+	oversize := oversizePNG(t)
 	if err := sendFrame(w, oversize, nil); err != nil {
 		t.Fatalf("oversize image send: %v", err)
 	}
@@ -1441,10 +1457,9 @@ func TestSendFrameShrinksOversizeImage(t *testing.T) {
 func TestMonitorLocalClipSurvivesOversizeFrame(t *testing.T) {
 	preserveGlobals(t)
 	secondsBetweenChecksForClipChange = 1
-	oversize := makeOversizePNG(t)
-	smallStart := makeTestPNG(t, 4, 5, 6)
-	cur := smallStart
+	oversize := oversizePNG(t)
 	var curMu sync.Mutex
+	cur := oversize
 	stubClipboard(t, func() string {
 		curMu.Lock()
 		defer curMu.Unlock()
@@ -1462,13 +1477,9 @@ func TestMonitorLocalClipSurvivesOversizeFrame(t *testing.T) {
 		close(done)
 	}()
 
-	// Wait for the first frame (the oversize PNG re-encoded under the cap),
-	// then require the monitor still alive — oversize must not tear down.
-	curMu.Lock()
-	cur = oversize
-	curMu.Unlock()
-
-	deadline := time.After(3 * time.Second)
+	// First frame: the oversize PNG, re-encoded under the cap (decode + JPEG
+	// ladder on a slow runner can take a few seconds — allow 15).
+	deadline := time.After(15 * time.Second)
 	for {
 		mu.Lock()
 		n := wire.Len()
@@ -1478,8 +1489,8 @@ func TestMonitorLocalClipSurvivesOversizeFrame(t *testing.T) {
 		}
 		select {
 		case <-deadline:
-			t.Fatal("monitor never wrote")
-		case <-time.After(10 * time.Millisecond):
+			t.Fatal("monitor never wrote a frame for oversize image")
+		case <-time.After(20 * time.Millisecond):
 		}
 	}
 	select {
@@ -1488,24 +1499,41 @@ func TestMonitorLocalClipSurvivesOversizeFrame(t *testing.T) {
 	default:
 	}
 
+	mu.Lock()
+	first := append([]byte(nil), wire.Bytes()...)
+	mu.Unlock()
+	var payload []byte
+	if err := gob.NewDecoder(bytes.NewReader(first)).Decode(&payload); err != nil {
+		t.Fatalf("decode first frame: %v", err)
+	}
+	if imagePayloadFormat(string(payload)) != formatJPEG {
+		t.Errorf("first frame format = %q, want shrunk jpeg", imagePayloadFormat(string(payload)))
+	}
+
 	curMu.Lock()
 	cur = "hello after oversize"
 	curMu.Unlock()
 
-	deadline = time.After(3 * time.Second)
+	deadline = time.After(15 * time.Second)
 	for {
 		mu.Lock()
 		n := wire.Len()
 		mu.Unlock()
-		if n > 1 {
+		if n > len(first) {
 			break
 		}
 		select {
 		case <-deadline:
 			t.Fatal("second frame never sent")
-		case <-time.After(10 * time.Millisecond):
+		case <-time.After(20 * time.Millisecond):
 		}
 	}
+	select {
+	case <-done:
+		t.Fatal("monitor exited before stop")
+	default:
+	}
+
 	close(stop)
 	select {
 	case <-done:

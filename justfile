@@ -41,6 +41,8 @@ lintci:
     # export data; force the toolchain CI effectively uses (go1.23.x).
     export GOTOOLCHAIN="${GOLANGCI_GOTOOLCHAIN:-go1.23.12}"
     echo "== golangci-lint $ver (.golangci.yml matches super-linter template, GOTOOLCHAIN=$GOTOOLCHAIN) =="
+    # cache clean: a warm cache once hid a revive finding CI caught.
+    "$dir/golangci-lint" cache clean
     "$dir/golangci-lint" run
     echo "== prettier 3.3.3 =="
     npx --yes prettier@3.3.3 --check '*.md' 'docs/**/*.md' '*.json' '.github/**/*.yml' '.github/**/*.json'

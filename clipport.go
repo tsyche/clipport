@@ -1436,7 +1436,7 @@ func shrinkImageToFit(payload string) (string, error) {
 	scales := []int{1, 2, 3, 4, 6, 8}
 	qualities := []int{85, 70, 55, 40, 25}
 	for _, div := range scales {
-		var scaled image.Image = img
+		scaled := img
 		if div > 1 {
 			scaled = downscaleBox(img, div)
 		}
