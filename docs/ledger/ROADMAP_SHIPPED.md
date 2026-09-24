@@ -24,8 +24,19 @@
 - [x] 2026-09-23 — Clipboard change debounce (250ms quiet window)
 - [x] 2026-09-23 — CLI security model section (`README` threat coverage)
 - [x] 2026-09-23 — Sleep/wake dead-peer recovery (wake gap → instant redial)
+- [x] 2026-09-24 — CI fuzz job (`FuzzMonitorSentClips`, 60s loop)
 
 ## Archived entries
+
+### 2026-09-24 — CI fuzz job (`FuzzMonitorSentClips`, 60s loop)
+
+Top 3 item 1. `FuzzMonitorSentClips` seed corpus exists but CI only runs the seed (`go test` without `-fuzz`). A short
+`-fuzz` job (e.g. 60s per PR) would catch decode regressions the static corpus misses.
+
+Shipped: `test.yml` gains a `fuzz` job (ubuntu-only) running
+`go test -race -run=^$ -fuzz=FuzzMonitorSentClips -fuzztime=60s .` on every push/PR alongside the existing matrix;
+`just fuzz` runs the same command locally. Verified green in CI (run `35943418159`, job "Fuzz MonitorSentClips (60s)")
+on commit `de8427e`; local 10s smoke run passed with no crashers. Commit: `de8427e`.
 
 ### 2026-09-23 — Sleep/wake dead-peer recovery (wake gap → instant redial)
 
