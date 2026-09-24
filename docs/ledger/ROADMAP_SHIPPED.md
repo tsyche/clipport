@@ -23,8 +23,23 @@
 - [x] 2026-09-23 — Max-clients cap (`--max-clients`, slot accounting)
 - [x] 2026-09-23 — Clipboard change debounce (250ms quiet window)
 - [x] 2026-09-23 — CLI security model section (`README` threat coverage)
+- [x] 2026-09-23 — Sleep/wake dead-peer recovery (wake gap → instant redial)
 
 ## Archived entries
+
+### 2026-09-23 — Sleep/wake dead-peer recovery (wake gap → instant redial)
+
+Top 3 item 1. Both sides rely on TCP keepalive (30s period, several missed probes) to notice a vanished peer — this can take minutes after wake before either side reacts. Detecting the local machine's own wake (e.g. macOS `NSWorkspace` notifications, or a large wall-clock gap between poll iterations) and immediately probing/closing stale connections would make recovery near-instant instead of "eventually."
+
+Shipped: client-side wall-clock gap detection — `monitorLocalClip(..., checkWake=true)` treats a poll iteration spanning
+`wakeGapThreshold` (30s) as suspend/resume, latches `systemWoke`, and tears the connection down; `ConnectToServer` sees
+the latch and redials immediately instead of honoring backoff. Server-side monitors never wake-detect
+(`MonitorLocalClip` wrapper passes `checkWake=false`): closing live server connections would deliver a clean EOF that
+healthy clients mistake for server shutdown and exit permanently. The server also delays its last-client exit by a 10s
+grace (`exitIfStillEmptyAfter`, cancelled by a reconnecting client or a pending handshake) so the instant redial is not
+raced by process shutdown. Tests: `TestMonitorLocalClipWakeGapLatchesAndReturns`,
+`TestMonitorLocalClipWithoutWakeCheckNeverReadsClock`, `TestExitIfStillEmptyAfterExitsWhenEmpty`,
+`TestExitIfStillEmptyAfterStaysWhenClientPresent`, `TestExitIfStillEmptyAfterStaysWhileHandshakePending`. Commit: `24807d5`.
 
 ### 2026-09-23 — CLI security model section (`README` threat coverage)
 
