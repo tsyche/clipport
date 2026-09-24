@@ -144,10 +144,29 @@ Refer to https://github.com/tsyche/clipport for more information`
 	// pruneStale is what the wake watcher calls; tests stub it to observe runs.
 	pruneStale = pruneStaleClients
 
+	// isClientProcess marks the dialing side. Clients never host peers, so
+	// they skip the receive-side re-broadcast in MonitorSentClips — a no-op
+	// across separate processes, but it keeps an in-process loopback test
+	// (both sides sharing one listOfClients) from echoing frames forever.
+	isClientProcess atomic.Bool
+
+	// runningServer exposes the live makeServer listener and wake-watcher
+	// stop channel so tests can shut the accept loop down; guarded by mu,
+	// nil when no server is running. Production never reads it.
+	runningServer *serverHandle
+
 	// exitProcess is os.Exit; tests stub it to observe shutdown without
 	// killing the test binary.
 	exitProcess = os.Exit
 )
+
+// serverHandle is the test-facing handle on a running makeServer (see
+// runningServer).
+type serverHandle struct {
+	l        net.Listener
+	wakeStop chan struct{}
+	wakeDone chan struct{}
+}
 
 // maxClipboardFrameBytes caps a single gob-encoded clipboard frame on the
 // wire. Guards MonitorSentClips against a malicious or buggy peer sending
@@ -801,7 +820,20 @@ func makeServer(port string) {
 		port = strconv.Itoa(l.Addr().(*net.TCPAddr).Port)
 	}
 	startStatusServer(port)
-	go watchServerWake(nil)
+	h := &serverHandle{l: l, wakeStop: make(chan struct{}), wakeDone: make(chan struct{})}
+	mu.Lock()
+	runningServer = h
+	mu.Unlock()
+	isClientProcess.Store(false)
+	defer func() {
+		mu.Lock()
+		runningServer = nil
+		mu.Unlock()
+	}()
+	go func() {
+		watchServerWake(h.wakeStop)
+		close(h.wakeDone)
+	}()
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
@@ -1008,6 +1040,7 @@ func ConnectToServer(address string) {
 		baseBackoff = 3 * time.Second
 		maxBackoff  = 30 * time.Second
 	)
+	isClientProcess.Store(true)
 	backoff := baseBackoff
 	for {
 		retry, reached := connectOnce(address)
@@ -1258,6 +1291,14 @@ func MonitorSentClips(r *bufio.Reader, key []byte) bool {
 		localClipboard = foreignClipboard
 		mu.Unlock()
 		debug("rcvd:", foreignClipboard)
+		if isClientProcess.Load() {
+			// A client hosts no peers: applying the received value is the
+			// whole job. Skipping the re-broadcast is a no-op across real
+			// processes (a client's listOfClients is empty) and stops an
+			// in-process loopback test — both sides sharing one list —
+			// from echoing frames between the two monitors forever.
+			continue
+		}
 		type dropInfo struct {
 			addr   string
 			secure bool

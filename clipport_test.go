@@ -224,6 +224,7 @@ func preserveGlobals(t *testing.T) {
 	oldProbeTimeout := staleProbeTimeout
 	oldWakePoll, oldWakeSettle := serverWakePoll, serverWakeSettle
 	oldPruneStale := pruneStale
+	oldClientProc := isClientProcess.Load()
 	oversizeFrameReported.Store(false)
 	t.Cleanup(func() {
 		secure, keyMode = oldSecure, oldKeyMode
@@ -246,6 +247,7 @@ func preserveGlobals(t *testing.T) {
 		staleProbeTimeout = oldProbeTimeout
 		serverWakePoll, serverWakeSettle = oldWakePoll, oldWakeSettle
 		pruneStale = oldPruneStale
+		isClientProcess.Store(oldClientProc)
 	})
 }
 
@@ -2403,3 +2405,153 @@ func preserveGlobalsFuzz(t *testing.T) {
 }
 
 // silence unused import if errors is only used in older tests
+
+// waitForCondition polls cond until it returns true or the timeout elapses.
+func waitForCondition(t *testing.T, timeout time.Duration, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// TestEndToEndLoopback runs makeServer and ConnectToServer in one process
+// over a real loopback socket and walks the full path end to end: startup
+// snapshot sync, clipboard change propagation (encrypted -s frames through
+// the debounce window), clean EOF shutdown (the client exits instead of
+// reconnecting), and the empty-server grace exit. Direction-specific
+// behavior stays covered by the unit tests — in-process both sides share
+// one clipboard, so this locks the plumbing down as a loop.
+func TestEndToEndLoopback(t *testing.T) {
+	preserveGlobals(t)
+	setTestHome(t)
+	secure, keyMode = true, false
+	password = []byte("e2e-loopback-secret")
+	secondsBetweenChecksForClipChange = 1
+	clipboardDebounce = 50 * time.Millisecond
+	emptyDisconnectGrace = 300 * time.Millisecond
+	serverWakePoll, serverWakeSettle = 50*time.Millisecond, 50*time.Millisecond
+
+	// Shared clipboard: getLocalClip exposes only the test-controlled value
+	// (clipVal) — setLocalClip deliberately does NOT write it back, because
+	// in-process both sides share this state: a late in-flight frame would
+	// otherwise clobber a change the test just made. Wire applications are
+	// observed through `applied` instead, so every recorded value still
+	// proves real traffic crossed the loopback socket.
+	var clipMu sync.Mutex
+	clipVal := "initial-clip"
+	var applied []string
+	getLocalClip = func() string {
+		clipMu.Lock()
+		defer clipMu.Unlock()
+		return clipVal
+	}
+	setLocalClip = func(s string) {
+		clipMu.Lock()
+		applied = append(applied, s)
+		clipMu.Unlock()
+	}
+	getApplied := func() []string {
+		clipMu.Lock()
+		defer clipMu.Unlock()
+		return append([]string(nil), applied...)
+	}
+	sawApplied := func(want string) func() bool {
+		return func() bool {
+			for _, s := range getApplied() {
+				if s == want {
+					return true
+				}
+			}
+			return false
+		}
+	}
+
+	var exitCode atomic.Int32
+	exitCode.Store(-1)
+	exitProcess = func(code int) { exitCode.Store(int32(code)) }
+
+	// Reserve a free port, then start the server and wait for its listener
+	// before dialing so the first connect attempt does not eat a backoff.
+	ln, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := strconv.Itoa(ln.Addr().(*net.TCPAddr).Port)
+	_ = ln.Close()
+
+	srvDone := make(chan struct{})
+	go func() {
+		makeServer(port)
+		close(srvDone)
+	}()
+	waitForCondition(t, 2*time.Second, "server listener to come up", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return runningServer != nil
+	})
+
+	cliDone := make(chan struct{})
+	go func() {
+		ConnectToServer(net.JoinHostPort("127.0.0.1", port))
+		close(cliDone)
+	}()
+	waitForRegisteredClient(t)
+
+	// 1. Startup sync: the first applied value means a frame crossed the wire.
+	waitForCondition(t, 5*time.Second, "initial snapshot to sync to the client", func() bool {
+		return len(getApplied()) > 0
+	})
+
+	// 2. Change propagation through debounce + encryption + monitors.
+	clipMu.Lock()
+	clipVal = "propagated-change"
+	clipMu.Unlock()
+	waitForCondition(t, 8*time.Second, "clipboard change to propagate", sawApplied("propagated-change"))
+
+	// 3. FIN shutdown: closing the server-side conn delivers EOF; with -s the
+	// client must take the clean-shutdown exit, not the reconnect path (an
+	// unclean drop would back off ≥3s before redialing).
+	mu.Lock()
+	serverConn := listOfClients[0].conn
+	mu.Unlock()
+	_ = serverConn.Close()
+	select {
+	case <-cliDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("client did not exit cleanly on server EOF")
+	}
+
+	// 4. Server side: last client gone → grace → exitProcess(0).
+	waitForCondition(t, 3*time.Second, "server grace exit", func() bool {
+		return exitCode.Load() == 0
+	})
+
+	// 5. HandleClient joined both monitors and removed its list entry — safe
+	// for preserveGlobals to restore shared state now.
+	waitForCondition(t, 3*time.Second, "server-side client cleanup", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(listOfClients) == 0
+	})
+
+	// 6. Stop the wake watcher (join it), then the accept loop, and join
+	// makeServer.
+	mu.Lock()
+	h := runningServer
+	mu.Unlock()
+	if h == nil {
+		t.Fatal("runningServer handle missing")
+	}
+	close(h.wakeStop)
+	<-h.wakeDone
+	_ = h.l.Close()
+	select {
+	case <-srvDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("makeServer did not stop after listener close")
+	}
+}
