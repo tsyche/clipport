@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Image clipboard support (PNG/JPEG): frames stay gob-encoded bytes with
+  magic-sniffing on the receive side, so the wire shape is unchanged. Text
+  reads fall back to platform image capture (`osascript` class data on
+  macOS, `xclip`/`wl-paste` MIME targets on Linux, PowerShell
+  `Get-Clipboard -Format Image` on Windows); applies via the matching
+  setter. Image-to-image change detection compares pixel fingerprints so
+  lossless re-encodes do not echo between peers.
 - CI fuzz job: `FuzzMonitorSentClips` now runs its actual fuzzing loop for
   60s on every push/PR (`just fuzz` locally, same shape), not just the seed
   corpus — catches gob-decode regressions the static seeds miss.

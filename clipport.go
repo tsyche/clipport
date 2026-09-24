@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/ecdh"
@@ -9,10 +10,14 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/gob"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"image"
+	_ "image/jpeg" // register JPEG decoder for image.Decode payload sniffing
+	"image/png"
 	"io"
 	"net"
 	"os"
@@ -99,7 +104,7 @@ Refer to https://github.com/tsyche/clipport for more information`
 	setLocalClip = runSetClipCommand
 
 	// clipReadErrReported latches after the first clipboard read failure so
-	// non-text content (image/file) does not spam handleError every poll
+	// an unreadable clipboard does not spam handleError every poll
 	// (uniclip#23). Cleared when a read succeeds.
 	clipReadErrReported atomic.Bool
 
@@ -966,9 +971,10 @@ func MonitorLocalClip(w *bufio.Writer, key []byte, stop <-chan struct{}) {
 // monitors for changes to the local clipboard and writes them to w.
 // Returns when stop is closed, the write fails, or the connection drops.
 // Empty frames are not put on the wire: getLocalClip returns "" for a
-// cleared clipboard, at startup, and whenever the OS clipboard has no
-// text representation (e.g. macOS pbpaste on an image). Sending those
-// would wipe peers; see MonitorSentClips for the receive-side backstop.
+// cleared clipboard, at startup, and whenever the OS clipboard holds content
+// clipport cannot read (formats beyond PNG/JPEG). Sending those would wipe
+// peers; see MonitorSentClips for the receive-side backstop. PNG/JPEG
+// payloads are sent as-is and sniffed by the receiver.
 // The initial snapshot sends immediately; subsequent changes pass through
 // a quiet-window debounce so a burst of edits puts one frame (the final
 // value) on the wire instead of one per poll.
@@ -1022,7 +1028,7 @@ func monitorLocalClip(w *bufio.Writer, key []byte, stop <-chan struct{}, checkWa
 			mu.Lock()
 			last := localClipboard
 			mu.Unlock()
-			if last != getLocalClip() {
+			if clipboardStateChanged(last, getLocalClip()) {
 				break
 			}
 		}
@@ -1090,11 +1096,12 @@ func MonitorSentClips(r *bufio.Reader, key []byte) bool {
 		}
 
 		foreignClipboard = string(foreignClipboardBytes)
-		// Empty means "no text on the peer" — cleared clipboard, startup sync,
-		// or non-text content (image/file) that the OS reports as "". Applying
-		// it would wipe this device's clipboard; clipport is text-only, so we
-		// drop it. MonitorLocalClip also refuses to emit empty frames; this
-		// receive-side check is the backstop for older peers.
+		// Empty means "no content on the peer" — cleared clipboard or a
+		// format clipport could not read. Applying it would wipe this
+		// device's clipboard, so we drop it. MonitorLocalClip also refuses
+		// to emit empty frames; this receive-side check is the backstop for
+		// older peers. Non-empty payloads (text or PNG/JPEG, sniffed by
+		// runSetClipCommand) are applied as-is.
 		if foreignClipboard == "" {
 			continue
 		}
@@ -1233,26 +1240,37 @@ func runGetClipCommand() string {
 			os.Exit(2)
 		}
 	}
-	if out, err = cmd.Output(); err != nil {
-		// Unreadable clipboard (non-text, e.g. image): report once per
-		// failure streak, then stay quiet. Return "" so MonitorLocalClip
-		// does not put an error sentinel on the wire (uniclip#23).
+	out, err = cmd.Output()
+	if err == nil && len(out) > 0 {
+		reportClipReadSuccess()
+		if runtime.GOOS == "windows" {
+			return normalizeWindowsClip(string(out))
+		}
+		return string(out)
+	}
+	// Text empty or unreadable: the clipboard may hold an image (PNG/JPEG),
+	// which text tools report as "" or a non-zero exit (uniclip#23).
+	if img, imgErr := readLocalImage(); imgErr == nil && len(img) > 0 {
+		reportClipReadSuccess()
+		return string(img)
+	}
+	if err != nil {
+		// Neither text nor image readable: report once per failure streak
+		// and return "" so MonitorLocalClip never puts an error sentinel
+		// on the wire (uniclip#23).
 		reportClipReadFailure(err)
 		return ""
 	}
 	reportClipReadSuccess()
-	if runtime.GOOS == "windows" {
-		return normalizeWindowsClip(string(out))
-	}
-	return string(out)
+	return ""
 }
 
 // reportClipReadFailure logs a clipboard read error at most once until
-// reportClipReadSuccess runs — non-text content would otherwise print
+// reportClipReadSuccess runs — an unreadable clipboard would otherwise print
 // every poll (uniclip#23).
 func reportClipReadFailure(err error) {
 	if clipReadErrReported.CompareAndSwap(false, true) {
-		handleError(fmt.Errorf("cannot read clipboard as text (non-text content?): %w", err))
+		handleError(fmt.Errorf("cannot read clipboard: %w", err))
 		fmt.Fprintln(os.Stderr, "error: suppressing further clipboard read errors until a read succeeds")
 	}
 }
@@ -1316,7 +1334,266 @@ func normalizeWindowsClip(s string) string {
 	return strings.TrimSuffix(s, "\n")
 }
 
+var (
+	pngMagic  = []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}
+	jpegMagic = []byte{0xFF, 0xD8, 0xFF}
+)
+
+// isImagePayload reports whether s carries a PNG or JPEG blob rather than
+// text. Receiver-side sniffing keeps the wire format unchanged: frames are
+// still gob-encoded []byte, and only these magic prefixes route to the image
+// clipboard path.
+func isImagePayload(s string) bool {
+	return imagePayloadFormat(s) != ""
+}
+
+func imagePayloadFormat(s string) string {
+	b := []byte(s)
+	if len(b) >= len(pngMagic) && bytes.Equal(b[:len(pngMagic)], pngMagic) {
+		return "png"
+	}
+	if len(b) >= len(jpegMagic) && bytes.Equal(b[:len(jpegMagic)], jpegMagic) {
+		return "jpeg"
+	}
+	return ""
+}
+
+// imageFingerprint hashes decoded pixels (re-encoded deterministically as
+// PNG) so a clipboard roundtrip that re-encodes the same picture still
+// compares equal — otherwise peers would echo images back and forth forever.
+// Undecodable payloads fall back to a raw-byte hash.
+func imageFingerprint(s string) [32]byte {
+	img, _, err := image.Decode(strings.NewReader(s))
+	if err != nil {
+		return sha256.Sum256([]byte(s))
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		return sha256.Sum256([]byte(s))
+	}
+	return sha256.Sum256(buf.Bytes())
+}
+
+// clipboardStateChanged decides whether the local clipboard moved on. Text
+// compares by equality; image-to-image compares by pixel fingerprint so a
+// lossless re-encode of the same picture (Windows SetImage/GetImage, macOS
+// class conversions) is not treated as a new copy.
+func clipboardStateChanged(last, cur string) bool {
+	if last == cur {
+		return false
+	}
+	if isImagePayload(last) && isImagePayload(cur) {
+		return imageFingerprint(last) != imageFingerprint(cur)
+	}
+	return true
+}
+
+// writeImageClip is the platform image setter; a var so tests can stub the
+// image path without shelling out.
+var writeImageClip = writeLocalImage
+
+func writeLocalImage(b []byte) error {
+	switch runtime.GOOS {
+	case "darwin":
+		return setDarwinImage(b)
+	case "windows": //nolint // literal "windows" used elsewhere too
+		return setWindowsImage(b)
+	default:
+		return setLinuxImage(b)
+	}
+}
+
+// setDarwinImage writes the payload to a private temp file and points the
+// macOS clipboard at it — osascript data literals in argv hit ARG_MAX on
+// large screenshots, file-based `read` does not.
+func setDarwinImage(b []byte) error {
+	class, ext := "PNGf", "png"
+	if imagePayloadFormat(string(b)) == "jpeg" {
+		class, ext = "JPEGf", "jpg"
+	}
+	f, err := os.CreateTemp("", "clipport-*."+ext)
+	if err != nil {
+		return err
+	}
+	name := f.Name()
+	defer os.Remove(name)
+	if _, err := f.Write(b); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	script := fmt.Sprintf("set the clipboard to (read (POSIX file %s) as «class %s»)", strconv.Quote(name), class)
+	return exec.Command("osascript", "-e", script).Run()
+}
+
+// setWindowsImage receives the blob as base64 on stdin (argv would overflow
+// on large images) and installs it via System.Windows.Forms.Clipboard.
+func setWindowsImage(b []byte) error {
+	const script = `Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+$b64 = [Console]::In.ReadToEnd()
+$bytes = [Convert]::FromBase64String($b64)
+$ms = New-Object System.IO.MemoryStream(,$bytes)
+$img = [System.Drawing.Image]::FromStream($ms)
+[System.Windows.Forms.Clipboard]::SetImage($img)`
+	cmd := exec.Command("powershell.exe", "-command", script)
+	cmd.Stdin = strings.NewReader(base64.StdEncoding.EncodeToString(b))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("setting image clipboard: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// setLinuxImage pipes the blob to xclip/X11 or wl-copy/Wayland with an
+// explicit image MIME type.
+func setLinuxImage(b []byte) error {
+	mime := "image/png"
+	if imagePayloadFormat(string(b)) == "jpeg" {
+		mime = "image/jpeg"
+	}
+	wayland := os.Getenv("WAYLAND_DISPLAY") != ""
+	type tool struct {
+		name string
+		args []string
+	}
+	var tools []tool
+	if wayland {
+		tools = append(tools, tool{"wl-copy", []string{"--type", mime}})
+		tools = append(tools, tool{"xclip", []string{"-in", "-selection", "clipboard", "-t", mime}})
+	} else {
+		tools = append(tools, tool{"xclip", []string{"-in", "-selection", "clipboard", "-t", mime}})
+		tools = append(tools, tool{"wl-copy", []string{"--type", mime}})
+	}
+	var lastErr error = errors.New("no image clipboard tool found (install xclip or wl-clipboard)")
+	for _, t := range tools {
+		if _, err := exec.LookPath(t.name); err != nil {
+			continue
+		}
+		// #nosec G204 -- t.name is from the fixed allowlist above, not user input
+		cmd := exec.Command(t.name, t.args...)
+		cmd.Stdin = bytes.NewReader(b)
+		if err := cmd.Run(); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+	}
+	return lastErr
+}
+
+// readLocalImage returns PNG/JPEG clipboard bytes, or an error when the
+// clipboard holds no image the platform tools can read.
+func readLocalImage() ([]byte, error) {
+	switch runtime.GOOS {
+	case "darwin":
+		if b, err := readOsascriptImage("PNGf"); err == nil {
+			return b, nil
+		}
+		return readOsascriptImage("JPEGf")
+	case "windows": //nolint // literal "windows" used elsewhere too
+		return readWindowsImage()
+	default:
+		return readLinuxImage()
+	}
+}
+
+func readOsascriptImage(class string) ([]byte, error) {
+	out, err := exec.Command("osascript", "-e", "the clipboard as «class "+class+"»").Output()
+	if err != nil {
+		return nil, err
+	}
+	return parseOsascriptData(string(out), class)
+}
+
+// parseOsascriptData decodes the «data CLASS HEX» literal osascript prints
+// for raw clipboard data.
+func parseOsascriptData(out, class string) ([]byte, error) {
+	out = strings.TrimSpace(out)
+	prefix := "«data " + class
+	if !strings.HasPrefix(out, prefix) || !strings.HasSuffix(out, "»") {
+		return nil, fmt.Errorf("unexpected osascript clipboard output")
+	}
+	hexPart := strings.TrimSuffix(strings.TrimPrefix(out, prefix), "»")
+	return hex.DecodeString(hexPart)
+}
+
+// readWindowsImage saves the system image clipboard as PNG and base64s it
+// to stdout (avoids PowerShell stdout encoding mangling raw bytes).
+func readWindowsImage() ([]byte, error) {
+	const script = `Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+$c = Get-Clipboard -Format Image -ErrorAction SilentlyContinue
+if ($null -eq $c) { exit 1 }
+$ms = New-Object System.IO.MemoryStream
+$c.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
+[Convert]::ToBase64String($ms.ToArray())`
+	out, err := exec.Command("powershell.exe", "-command", script).Output()
+	if err != nil {
+		return nil, err
+	}
+	return base64.StdEncoding.DecodeString(strings.TrimSpace(string(out)))
+}
+
+// readLinuxImage tries image-capable clipboard tools (xclip on X11,
+// wl-paste on Wayland) for PNG, then JPEG. xsel has no image support.
+func readLinuxImage() ([]byte, error) {
+	wayland := os.Getenv("WAYLAND_DISPLAY") != ""
+	mimes := []string{"image/png", "image/jpeg"}
+	type candidate struct {
+		build func(mime string) *exec.Cmd
+		name  string
+	}
+	var cands []candidate
+	if wayland {
+		cands = append(cands, candidate{
+			name: "wl-paste",
+			build: func(mime string) *exec.Cmd {
+				return exec.Command("wl-paste", "--no-newline", "--type", mime)
+			},
+		})
+		cands = append(cands, candidate{
+			name: "xclip",
+			build: func(mime string) *exec.Cmd {
+				return exec.Command("xclip", "-out", "-selection", "clipboard", "-t", mime)
+			},
+		})
+	} else {
+		cands = append(cands, candidate{
+			name: "xclip",
+			build: func(mime string) *exec.Cmd {
+				return exec.Command("xclip", "-out", "-selection", "clipboard", "-t", mime)
+			},
+		})
+		cands = append(cands, candidate{
+			name: "wl-paste",
+			build: func(mime string) *exec.Cmd {
+				return exec.Command("wl-paste", "--no-newline", "--type", mime)
+			},
+		})
+	}
+	for _, c := range cands {
+		if _, err := exec.LookPath(c.name); err != nil {
+			continue
+		}
+		for _, mime := range mimes {
+			out, err := c.build(mime).Output()
+			if err == nil && isImagePayload(string(out)) {
+				return out, nil
+			}
+		}
+	}
+	return nil, errors.New("no image clipboard content readable (need xclip or wl-clipboard)")
+}
+
 func runSetClipCommand(s string) {
+	if isImagePayload(s) {
+		if err := writeImageClip([]byte(s)); err != nil {
+			handleError(err)
+		}
+		return
+	}
 	var copyCmd *exec.Cmd
 	var err error
 	switch runtime.GOOS {

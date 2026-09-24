@@ -5,7 +5,7 @@ Cross-platform shared clipboard over TCP. Copy on one device, paste on another �
 ## Stack
 
 - **Language**: Go (single binary, no CGO)
-- **Clipboard**: platform-native (`pbpaste`/`pbcopy` on macOS, `clip`/PowerShell on Windows, `xclip`/`xsel`/`wl-paste` on Linux — Wayland sessions with `$WAYLAND_DISPLAY` set prefer `wl-paste`/`wl-copy`)
+- **Clipboard**: platform-native (`pbpaste`/`pbcopy` on macOS, `clip`/PowerShell on Windows, `xclip`/`xsel`/`wl-paste` on Linux — Wayland sessions with `$WAYLAND_DISPLAY` set prefer `wl-paste`/`wl-copy`); PNG/JPEG images sync too (magic-sniffed frames, platform image read/write)
 - **Encryption**: AES-256-GCM, keyed either via scrypt over a shared password (`--secure`/`-s`) or an ECDH-derived secret from a per-device X25519 keypair (`--key`/`-k`, generated with `clipport keygen`)
 - **Release**: goreleaser cross-compiles for darwin/linux/windows/FreeBSD × amd64/arm/arm64/386 (excluding windows/arm64); push a `v*` tag to trigger the GitHub Actions release workflow, publish binaries to GitHub Releases, and push a formula to `tsyche/homebrew-tap`
 

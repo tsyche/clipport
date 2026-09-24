@@ -7,6 +7,8 @@ import (
 	"encoding/gob"
 	"encoding/json"
 	"errors"
+	"image"
+	"image/png"
 	"io"
 	"net"
 	"os"
@@ -217,6 +219,7 @@ func preserveGlobals(t *testing.T) {
 	oldClock := clockNow
 	oldGrace := emptyDisconnectGrace
 	oldExit := exitProcess
+	oldWriteImage := writeImageClip
 	t.Cleanup(func() {
 		secure, keyMode = oldSecure, oldKeyMode
 		password = oldPassword
@@ -234,6 +237,7 @@ func preserveGlobals(t *testing.T) {
 		clockNow = oldClock
 		emptyDisconnectGrace = oldGrace
 		exitProcess = oldExit
+		writeImageClip = oldWriteImage
 	})
 }
 
@@ -1156,6 +1160,200 @@ type muWriter struct {
 	b  *bytes.Buffer
 }
 
+// makeTestPNG encodes a solid-color PNG for image-payload tests.
+func makeTestPNG(t *testing.T, r, g, b uint8) string {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, 4, 4))
+	for i := range img.Pix {
+		switch i % 4 {
+		case 0:
+			img.Pix[i] = r
+		case 1:
+			img.Pix[i] = g
+		case 2:
+			img.Pix[i] = b
+		default:
+			img.Pix[i] = 255
+		}
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatalf("encode fixture png: %v", err)
+	}
+	return buf.String()
+}
+
+func TestIsImagePayload(t *testing.T) {
+	pngData := "\x89PNG\r\n\x1a\n" + "rest"
+	jpegData := "\xff\xd8\xff\xe0" + "rest"
+	cases := []struct {
+		name, in string
+		want     string
+	}{
+		{"png", pngData, "png"},
+		{"jpeg", jpegData, "jpeg"},
+		{"text", "hello world", ""},
+		{"empty", "", ""},
+		{"png-like text too short", "\x89PNG", ""},
+	}
+	for _, c := range cases {
+		if got := imagePayloadFormat(c.in); got != c.want {
+			t.Errorf("%s: format = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+func TestClipboardStateChangedImageRoundtrip(t *testing.T) {
+	original := makeTestPNG(t, 10, 20, 30)
+	// Same pixels, re-encoded through decode→encode: fingerprint must match.
+	img, _, err := image.Decode(strings.NewReader(original))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reencoded bytes.Buffer
+	if err := png.Encode(&reencoded, img); err != nil {
+		t.Fatal(err)
+	}
+	if clipboardStateChanged(original, reencoded.String()) {
+		t.Error("re-encoded identical image counted as a change (echo loop)")
+	}
+	different := makeTestPNG(t, 200, 10, 10)
+	if !clipboardStateChanged(original, different) {
+		t.Error("different image not detected as a change")
+	}
+	if clipboardStateChanged(original, original) {
+		t.Error("identical bytes counted as a change")
+	}
+	if !clipboardStateChanged(original, "now text") {
+		t.Error("image→text transition not detected")
+	}
+	if !clipboardStateChanged("text", original) {
+		t.Error("text→image transition not detected")
+	}
+}
+
+func TestParseOsascriptData(t *testing.T) {
+	got, err := parseOsascriptData("«data PNGf89504E470D0A»\n", "PNGf")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if !bytes.Equal(got, []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A}) {
+		t.Errorf("got %x, want 89504e470d0a", got)
+	}
+	if _, err := parseOsascriptData("garbage", "PNGf"); err == nil {
+		t.Error("expected error on unexpected output")
+	}
+	if _, err := parseOsascriptData("«data PNGfzz»", "PNGf"); err == nil {
+		t.Error("expected error on invalid hex")
+	}
+}
+
+func TestMonitorLocalClipSendsImagePayload(t *testing.T) {
+	preserveGlobals(t)
+	secondsBetweenChecksForClipChange = 1
+	pngData := makeTestPNG(t, 1, 2, 3)
+	stubClipboard(t, func() string { return pngData })
+
+	var mu sync.Mutex
+	var wire bytes.Buffer
+	w := bufio.NewWriter(&muWriter{mu: &mu, b: &wire})
+
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		MonitorLocalClip(w, nil, stop)
+		close(done)
+	}()
+
+	deadline := time.After(3 * time.Second)
+	for {
+		mu.Lock()
+		n := wire.Len()
+		mu.Unlock()
+		if n > 0 {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("MonitorLocalClip never wrote the image frame")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	close(stop)
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("MonitorLocalClip did not return after stop")
+	}
+
+	mu.Lock()
+	data := append([]byte(nil), wire.Bytes()...)
+	mu.Unlock()
+	var payload []byte
+	if err := gob.NewDecoder(bytes.NewReader(data)).Decode(&payload); err != nil {
+		t.Fatalf("decode sent frame: %v", err)
+	}
+	if string(payload) != pngData {
+		t.Error("image payload not sent verbatim")
+	}
+}
+
+func TestMonitorSentClipsAppliesImagePayload(t *testing.T) {
+	preserveGlobals(t)
+	mu.Lock()
+	listOfClients = nil
+	mu.Unlock()
+	pngData := makeTestPNG(t, 9, 9, 9)
+	var setMu sync.Mutex
+	var applied string
+	getLocalClip = func() string { return "" }
+	setLocalClip = func(s string) {
+		setMu.Lock()
+		applied = s
+		setMu.Unlock()
+	}
+
+	data := encodeFrame(t, []byte(pngData))
+	done := make(chan struct{})
+	go func() {
+		_ = MonitorSentClips(bufio.NewReader(bytes.NewReader(data)), nil)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("MonitorSentClips did not finish")
+	}
+
+	setMu.Lock()
+	got := applied
+	setMu.Unlock()
+	if got != pngData {
+		t.Error("image payload not applied to local clipboard")
+	}
+	mu.Lock()
+	local := localClipboard
+	mu.Unlock()
+	if local != pngData {
+		t.Error("localClipboard not updated with image payload")
+	}
+}
+
+func TestRunSetClipCommandRoutesImageToWriter(t *testing.T) {
+	preserveGlobals(t)
+	var written atomic.Value
+	writeImageClip = func(b []byte) error {
+		written.Store(string(b))
+		return nil
+	}
+	pngData := makeTestPNG(t, 7, 7, 7)
+	runSetClipCommand(pngData)
+	got, _ := written.Load().(string)
+	if got != pngData {
+		t.Error("writeImageClip did not receive image bytes")
+	}
+}
+
 func (m *muWriter) Write(p []byte) (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1427,7 +1625,7 @@ func TestClipReadFailureReportedOnceUntilSuccess(t *testing.T) {
 	first := captureStderr(t, func() {
 		reportClipReadFailure(errors.New("exit status 1"))
 	})
-	if !strings.Contains(first, "cannot read clipboard as text") {
+	if !strings.Contains(first, "cannot read clipboard:") {
 		t.Errorf("first failure should log, got %q", first)
 	}
 
@@ -1443,7 +1641,7 @@ func TestClipReadFailureReportedOnceUntilSuccess(t *testing.T) {
 	third := captureStderr(t, func() {
 		reportClipReadFailure(errors.New("exit status 1"))
 	})
-	if !strings.Contains(third, "cannot read clipboard as text") {
+	if !strings.Contains(third, "cannot read clipboard:") {
 		t.Errorf("failure after success should log again, got %q", third)
 	}
 	clipReadErrReported.Store(false)

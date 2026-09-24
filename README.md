@@ -28,6 +28,8 @@ Just enter what it says (`clipport 192.168.86.24:51607`) on your other device wi
 
 You can even have multiple devices joined to the same clipboard (just run that same command on the new device).
 
+Besides text, PNG and JPEG images copied on one device paste on the other (via `pbpaste`/`pbcopy`-adjacent tooling on macOS, `xclip`/`wl-paste` on Linux, and PowerShell on Windows). Other formats still propagate as text only when the OS exposes them that way, and never wipe a peer's clipboard when they do not.
+
 ```text
 Clipport - Universal Clipboard
 With Clipport, you can copy from one device and paste on another.
@@ -132,7 +134,7 @@ brew install tsyche/tap/clipport
 
 Or grab a binary from the [releases page](https://github.com/tsyche/clipport/releases) and move it to `/usr/local/bin/clipport`.
 
-> **Note:** at least one of `xsel`, `xclip`, or `wl-clipboard` is required (on Wayland, `wl-clipboard` is preferred when present).
+> **Note:** at least one of `xsel`, `xclip`, or `wl-clipboard` is required (on Wayland, `wl-clipboard` is preferred when present). Image clipboard support needs `xclip` or `wl-clipboard` — `xsel` handles text only.
 
 ### NixOS / Nix
 
