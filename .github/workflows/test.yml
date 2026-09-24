@@ -53,3 +53,15 @@ jobs:
       # fuzzing loop to catch decode regressions the static seeds miss.
       - name: Fuzz MonitorSentClips
         run: go test -race -run=^$ -fuzz=FuzzMonitorSentClips -fuzztime=60s .
+
+      # A crasher is written to testdata/fuzz/… in the runner workspace,
+      # which is discarded with the job. Keep it so the corpus can be
+      # committed and the bug reproduced locally.
+      - name: Upload fuzz crashers
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashers
+          path: testdata/fuzz/
+          if-no-files-found: ignore
+          retention-days: 14
