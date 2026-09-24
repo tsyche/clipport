@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Oversize-frame graceful degradation: a clipboard payload over the 8 MiB
+  wire cap no longer drops the sender's connection. Images are re-encoded
+  on a downscale × JPEG-quality ladder to fit (headroom for gob/AES-GCM
+  overhead); anything still over the cap is skipped with one warning per
+  streak instead of failing the link (which previously made peers
+  reconnect and potentially resend in a loop).
 - Image clipboard support (PNG/JPEG): frames stay gob-encoded bytes with
   magic-sniffing on the receive side, so the wire shape is unchanged. Text
   reads fall back to platform image capture (`osascript` class data on

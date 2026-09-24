@@ -16,7 +16,8 @@ import (
 	"flag"
 	"fmt"
 	"image"
-	_ "image/jpeg" // register JPEG decoder for image.Decode payload sniffing
+	"image/color"
+	"image/jpeg"
 	"image/png"
 	"io"
 	"net"
@@ -107,6 +108,11 @@ Refer to https://github.com/tsyche/clipport for more information`
 	// an unreadable clipboard does not spam handleError every poll
 	// (uniclip#23). Cleared when a read succeeds.
 	clipReadErrReported atomic.Bool
+
+	// oversizeFrameReported latches after the first skipped oversize frame
+	// so a persistent over-limit clipboard prints one warning, not one per
+	// change streak. Cleared when a frame sends successfully.
+	oversizeFrameReported atomic.Bool
 
 	// wakeGapThreshold: a MonitorLocalClip poll iteration that takes at least
 	// this long means the machine suspended mid-poll (sleep/wake). The client
@@ -977,7 +983,9 @@ func MonitorLocalClip(w *bufio.Writer, key []byte, stop <-chan struct{}) {
 // payloads are sent as-is and sniffed by the receiver.
 // The initial snapshot sends immediately; subsequent changes pass through
 // a quiet-window debounce so a burst of edits puts one frame (the final
-// value) on the wire instead of one per poll.
+// value) on the wire instead of one per poll. Oversize payloads never fail
+// the connection: images are re-encoded under the frame cap when possible,
+// otherwise the frame is skipped with a single warning (see sendFrame).
 // When checkWake is set (client connections only), a poll iteration that
 // takes wakeGapThreshold or longer is treated as a suspend/resume: systemWoke
 // is latched and the monitor returns, which tears the connection down so the
@@ -997,7 +1005,7 @@ func monitorLocalClip(w *bufio.Writer, key []byte, stop <-chan struct{}, checkWa
 		// localClipboard is already updated above even when cur is empty, so
 		// the change-poll below does not spin while the clipboard stays empty.
 		if cur != "" {
-			err := sendClipboard(w, cur, key)
+			err := sendFrame(w, cur, key)
 			if err != nil {
 				if !isNetworkDisconnect(err) {
 					handleError(err)
@@ -1158,6 +1166,38 @@ func sendClipboard(w *bufio.Writer, clipboard string, key []byte) error {
 	}
 	debug("sent:", clipboard)
 	return w.Flush()
+}
+
+// sendFrame puts payload on the wire. An oversize image is re-encoded smaller
+// and retried; anything still over the cap is skipped with one warning per
+// streak — never a connection failure, which would make peers reconnect (and
+// potentially resend) in a loop. Returns an error only for real send failures.
+func sendFrame(w *bufio.Writer, payload string, key []byte) error {
+	err := sendClipboard(w, payload, key)
+	if err == nil {
+		oversizeFrameReported.Store(false)
+		return nil
+	}
+	if !errors.Is(err, errClipboardTooLarge) {
+		return err
+	}
+	if isImagePayload(payload) {
+		if shrunk, serr := shrinkImageToFit(payload); serr == nil {
+			if err2 := sendClipboard(w, shrunk, key); err2 == nil {
+				oversizeFrameReported.Store(false)
+				debug("shrunk oversize image frame to", len(shrunk), "bytes")
+				return nil
+			} else if !errors.Is(err2, errClipboardTooLarge) {
+				return err2
+			}
+		}
+	}
+	if oversizeFrameReported.CompareAndSwap(false, true) {
+		fmt.Fprintf(os.Stderr,
+			"warning: clipboard frame is %d bytes (limit %d); not sent until clipboard changes\n",
+			len(payload), maxClipboardFrameBytes)
+	}
+	return nil
 }
 
 // Thanks to https://bruinsslot.jp/post/golang-crypto/ for crypto logic
@@ -1381,6 +1421,69 @@ func imageFingerprint(s string) [32]byte {
 		return sha256.Sum256([]byte(s))
 	}
 	return sha256.Sum256(buf.Bytes())
+}
+
+// shrinkImageToFit re-encodes an image payload as JPEG on a downscale ×
+// quality ladder until it fits under the wire frame cap (minus headroom for
+// gob/AES-GCM overhead). Returns errClipboardTooLarge when no step fits —
+// callers then skip the frame instead of dropping the connection.
+func shrinkImageToFit(payload string) (string, error) {
+	img, _, err := image.Decode(strings.NewReader(payload))
+	if err != nil {
+		return "", err
+	}
+	limit := maxClipboardFrameBytes - (64 << 10)
+	scales := []int{1, 2, 3, 4, 6, 8}
+	qualities := []int{85, 70, 55, 40, 25}
+	for _, div := range scales {
+		var scaled image.Image = img
+		if div > 1 {
+			scaled = downscaleBox(img, div)
+		}
+		for _, q := range qualities {
+			var buf bytes.Buffer
+			if err := jpeg.Encode(&buf, scaled, &jpeg.Options{Quality: q}); err != nil {
+				return "", err
+			}
+			if buf.Len() <= limit {
+				return buf.String(), nil
+			}
+		}
+	}
+	return "", errClipboardTooLarge
+}
+
+// downscaleBox averages div×div source pixels into one destination pixel —
+// a dependency-free box filter (stdlib has no scaler; x/image is overkill).
+func downscaleBox(src image.Image, div int) image.Image {
+	b := src.Bounds()
+	w, h := b.Dx()/div, b.Dy()/div
+	if w < 1 || h < 1 {
+		return src
+	}
+	dst := image.NewRGBA(image.Rect(0, 0, w, h))
+	n := uint64(div * div)
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			var r, g, bl, a uint64
+			for dy := 0; dy < div; dy++ {
+				for dx := 0; dx < div; dx++ {
+					pr, pg, pb, pa := src.At(b.Min.X+x*div+dx, b.Min.Y+y*div+dy).RGBA()
+					r += uint64(pr)
+					g += uint64(pg)
+					bl += uint64(pb)
+					a += uint64(pa)
+				}
+			}
+			dst.Set(x, y, color.RGBA64{
+				R: uint16(r / n),  // #nosec G115 -- color.Color.RGBA() returns 16-bit channels
+				G: uint16(g / n),  // #nosec G115 -- color.Color.RGBA() returns 16-bit channels
+				B: uint16(bl / n), // #nosec G115 -- color.Color.RGBA() returns 16-bit channels
+				A: uint16(a / n),  // #nosec G115 -- color.Color.RGBA() returns 16-bit channels
+			})
+		}
+	}
+	return dst
 }
 
 // clipboardStateChanged decides whether the local clipboard moved on. Text

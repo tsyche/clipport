@@ -44,7 +44,7 @@ because 1.60.3 cannot read newer export data), prettier 3.3.3, markdownlint-cli
 0.41.0, textlint 14.2.0 (+ `textlint-rule-terminology`,
 `textlint-filter-rule-comments`). Added `.golangci.yml` and `.textlintrc.json`
 matching super-linter's TEMPLATES so config is identical on both sides;
-lintci's prettier globs also cover `*.json` and `.github` yml/json (the
+lintci's prettier globs also cover JSON files and `.github` YAML/JSON (the
 JSON_PRETTIER category that caught the first attempt). Documented in
 `AGENTS.md`/`CLAUDE.md`/`CONTRIBUTING.md`. Verified green locally and in CI.
 Commits: `2293434`, `5a076d1`.

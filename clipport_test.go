@@ -220,6 +220,7 @@ func preserveGlobals(t *testing.T) {
 	oldGrace := emptyDisconnectGrace
 	oldExit := exitProcess
 	oldWriteImage := writeImageClip
+	oversizeFrameReported.Store(false)
 	t.Cleanup(func() {
 		secure, keyMode = oldSecure, oldKeyMode
 		password = oldPassword
@@ -1351,6 +1352,165 @@ func TestRunSetClipCommandRoutesImageToWriter(t *testing.T) {
 	got, _ := written.Load().(string)
 	if got != pngData {
 		t.Error("writeImageClip did not receive image bytes")
+	}
+}
+
+// makeOversizePNG builds a PNG larger than maxClipboardFrameBytes by encoding
+// high-entropy pixels (poorly compressible).
+func makeOversizePNG(t *testing.T) string {
+	t.Helper()
+	const side = 2400
+	img := image.NewRGBA(image.Rect(0, 0, side, side))
+	seed := uint32(1)
+	for i := 0; i < len(img.Pix); i += 4 {
+		seed = seed*1664525 + 1013904223
+		img.Pix[i] = byte(seed >> 24)
+		img.Pix[i+1] = byte(seed >> 16)
+		img.Pix[i+2] = byte(seed >> 8)
+		img.Pix[i+3] = 255
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatalf("encode oversize fixture: %v", err)
+	}
+	if buf.Len() <= maxClipboardFrameBytes {
+		t.Fatalf("fixture not oversize: %d <= %d", buf.Len(), maxClipboardFrameBytes)
+	}
+	return buf.String()
+}
+
+func TestShrinkImageToFit(t *testing.T) {
+	oversize := makeOversizePNG(t)
+	shrunk, err := shrinkImageToFit(oversize)
+	if err != nil {
+		t.Fatalf("shrink: %v", err)
+	}
+	if imagePayloadFormat(shrunk) != formatJPEG {
+		t.Fatalf("shrunk format = %q, want jpeg", imagePayloadFormat(shrunk))
+	}
+	if len(shrunk) > maxClipboardFrameBytes-(64<<10) {
+		t.Errorf("shrunk still too large: %d bytes", len(shrunk))
+	}
+	if _, err := shrinkImageToFit("not an image"); err == nil {
+		t.Error("expected error for non-image payload")
+	}
+}
+
+func TestSendFrameSkipsOversizeTextWithoutError(t *testing.T) {
+	preserveGlobals(t)
+	var buf bytes.Buffer
+	w := bufio.NewWriter(&buf)
+	oversizeText := strings.Repeat("a", maxClipboardFrameBytes+1)
+	if err := sendFrame(w, oversizeText, nil); err != nil {
+		t.Fatalf("oversize text must skip, not error: %v", err)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("expected no bytes on wire, got %d", buf.Len())
+	}
+	if !oversizeFrameReported.Load() {
+		t.Error("skip latch not set")
+	}
+	if err := sendFrame(w, "small", nil); err != nil {
+		t.Fatalf("send small: %v", err)
+	}
+	if oversizeFrameReported.Load() {
+		t.Error("latch not cleared after successful send")
+	}
+}
+
+func TestSendFrameShrinksOversizeImage(t *testing.T) {
+	preserveGlobals(t)
+	var buf bytes.Buffer
+	w := bufio.NewWriter(&buf)
+	oversize := makeOversizePNG(t)
+	if err := sendFrame(w, oversize, nil); err != nil {
+		t.Fatalf("oversize image send: %v", err)
+	}
+	if buf.Len() == 0 {
+		t.Fatal("expected shrunk frame on wire")
+	}
+	var payload []byte
+	if err := gob.NewDecoder(bytes.NewReader(buf.Bytes())).Decode(&payload); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if imagePayloadFormat(string(payload)) != formatJPEG {
+		t.Errorf("wire payload format = %q, want jpeg", imagePayloadFormat(string(payload)))
+	}
+}
+
+func TestMonitorLocalClipSurvivesOversizeFrame(t *testing.T) {
+	preserveGlobals(t)
+	secondsBetweenChecksForClipChange = 1
+	oversize := makeOversizePNG(t)
+	smallStart := makeTestPNG(t, 4, 5, 6)
+	cur := smallStart
+	var curMu sync.Mutex
+	stubClipboard(t, func() string {
+		curMu.Lock()
+		defer curMu.Unlock()
+		return cur
+	})
+
+	var mu sync.Mutex
+	var wire bytes.Buffer
+	w := bufio.NewWriter(&muWriter{mu: &mu, b: &wire})
+
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		MonitorLocalClip(w, nil, stop)
+		close(done)
+	}()
+
+	// Wait for the first frame (the oversize PNG re-encoded under the cap),
+	// then require the monitor still alive — oversize must not tear down.
+	curMu.Lock()
+	cur = oversize
+	curMu.Unlock()
+
+	deadline := time.After(3 * time.Second)
+	for {
+		mu.Lock()
+		n := wire.Len()
+		mu.Unlock()
+		if n > 0 {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("monitor never wrote")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	select {
+	case <-done:
+		t.Fatal("monitor exited after oversize frame")
+	default:
+	}
+
+	curMu.Lock()
+	cur = "hello after oversize"
+	curMu.Unlock()
+
+	deadline = time.After(3 * time.Second)
+	for {
+		mu.Lock()
+		n := wire.Len()
+		mu.Unlock()
+		if n > 1 {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("second frame never sent")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	close(stop)
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("monitor did not return after stop")
 	}
 }
 
