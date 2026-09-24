@@ -4,18 +4,18 @@ Inferred from the codebase on 2026-06-16 (no prior ROADMAP.md existed); audited 
 
 ## Top 3 Suggested Tasks
 
-1. **Prune on full before rejecting** — ~20 minutes
-   - When a joiner hits "server full", run one stale-probe pass first: write-dead slots (e.g. a peer that never came
-     back after a previous wake) free immediately, so healthy peers rarely get rejected. Follow-on from shipped server
-     wake pruning. _(Promoted to Top 3.)_
-2. **Fuzz-failure artifact upload** — ~20 minutes
+1. **Fuzz-failure artifact upload** — ~20 minutes
    - When the CI fuzz job finds a crasher, Go writes it under `testdata/fuzz/…`, but the runner's workspace is
      discarded. Upload that directory as a workflow artifact on failure so the corpus can be committed and the bug
      reproduced locally. _(Promoted to Top 3.)_
-3. **`CLIPPORT_PASSWORD` env / `--password-file` for `-s`** — ~30 minutes
+2. **`CLIPPORT_PASSWORD` env / `--password-file` for `-s`** — ~30 minutes
    - `-s` reads the shared password from an interactive prompt, so scripted secure deployments either fall back to
      plaintext or embed the password in launchd/systemd command lines. Reading it from an env var or file pairs with
      the headless plaintext opt-in for unattended secure mode too. _(Promoted to Top 3.)_
+3. **Prune-pass cooldown on the accept loop** — ~20 minutes
+   - Follow-on to shipped prune-on-full: every rejected joiner triggers one stale-probe pass, so a flood of joiners at
+     capacity serializes probe writes under the global clipboard lock. A shared minimum interval between passes keeps
+     probe traffic bounded while preserving the slot-reclaim benefit. _(Promoted to Top 3.)_
 
 ## New Suggestions (2026-07-02)
 
@@ -32,23 +32,15 @@ Inferred from the codebase on 2026-06-16 (no prior ROADMAP.md existed); audited 
 3. **File-path clipboard sync** — ~half day
    - Copying a file in Finder/Explorer puts a path/URI on the clipboard, not bytes; sync the path text so the peer pastes a usable location (same-machine paths aside).
    - 🧑 needs-human: scope decision — what a cross-OS path should paste as (POSIX vs Windows path, or an error)
-4. **Prune on full before rejecting** — ~20 minutes
-   - When a joiner hits "server full", run one stale-probe pass first: write-dead slots (e.g. a peer that never came
-     back after a previous wake) free immediately, so healthy peers rarely get rejected. Follow-on from shipped server
-     wake pruning. _(Promoted to Top 3.)_
-5. **Stale-prune count in `clipport status`** — ~20 minutes
+4. **Stale-prune count in `clipport status`** — ~20 minutes
    - Wake pruning only logs at debug level; surface a closed-by-prune counter in the status snapshot so users can see that slots were reclaimed. Follow-on from shipped server wake pruning.
-6. **`clipport key rotate` helper** — ~20 minutes
+5. **`clipport key rotate` helper** — ~20 minutes
    - `keygen` refuses to overwrite an existing key, so rotating today means manually removing `~/.clipport/key`; a `clipport key rotate` subcommand would regenerate safely and remind the user to re-verify fingerprints with peers. Follow-on from shipped own-key fingerprint work.
-7. **`CLIPPORT_PASSWORD` env / `--password-file` for `-s`** — ~30 minutes
-   - `-s` reads the shared password from an interactive prompt, so scripted secure deployments either fall back to
-     plaintext or embed the password in launchd/systemd command lines. Reading it from an env var or file pairs with
-     the headless plaintext opt-in for unattended secure mode too. _(Promoted to Top 3.)_
-8. **`clipport doctor` diagnostics** — ~1 hour
+6. **`clipport doctor` diagnostics** — ~1 hour
    - First-run failures (missing clipboard backend, no key, firewall on the port) surface as opaque connect errors;
      a `clipport doctor` subcommand would check backend availability, keypair/known-hosts state, and listener
      reachability, pointing at the fix.
-9. **Last-seen timestamp in `known-hosts list`** — ~30 minutes
+7. **Last-seen timestamp in `known-hosts list`** — ~30 minutes
    - After wake-prune work, users have no way to tell whether a trusted peer is still alive from the list alone;
      record and show a last-seen time per entry (updated on handshake).
 
@@ -126,3 +118,8 @@ Security constraint: remote mode must require `-k`; clear error message if attem
   moved to ledger). Promoted `CLIPPORT_PASSWORD`/`--password-file` from suggestions (companion to headless secure mode).
   New Top 3: prune-on-full, fuzz-failure artifact upload, password env/file — all agent-doable. No new suggestions (same-day
   batch of three still pending).
+- 2026-09-24 audit: shipped prune-on-full (Top 3 #1: `reserveClientSlotWithPrune` runs one stale-probe pass before rejecting
+  a full joiner, commit `9939cb5` — moved to ledger) and the approved CHANGELOG catch-up (shipped same-day, commit
+  `5389489` — backfilled wake pruning, key fingerprint, plaintext opt-in, prune-on-full). Promoted prune-pass cooldown from
+  this audit's suggestions. New Top 3: fuzz artifact upload, password env/file, prune-pass cooldown — all agent-doable.
+  Declined (not written): server-full reason to joiner.

@@ -33,8 +33,30 @@
 - [x] 2026-09-24 — `clipport key fingerprint` subcommand (own-key TOFU verification)
 - [x] 2026-09-24 — End-to-end loopback integration test (sync/propagation/FIN/grace exit)
 - [x] 2026-09-24 — `CLIPPORT_ALLOW_PLAINTEXT` headless opt-in (skip plaintext prompt)
+- [x] 2026-09-24 — Prune stale clients when server is full before rejecting
 
 ## Archived entries
+
+### 2026-09-24 — Prune on full before rejecting
+
+1. **Prune on full before rejecting** — ~20 minutes
+   - When a joiner hits "server full", run one stale-probe pass first: write-dead slots (e.g. a peer that never came
+     back after a previous wake) free immediately, so healthy peers rarely get rejected. Follow-on from shipped server
+     wake pruning. _(Promoted to Top 3.)_
+
+Shipped: `reserveClientSlotWithPrune` now fronts the `makeServer`
+accept loop — when `tryReserveClientSlot` fails (server at
+`--max-clients`), one `pruneStale` pass runs, then a bounded poll
+(20 × 25ms) waits for `HandleClient`'s async cleanup to release the
+freed slot before retrying the reservation; only if no slot opens is
+the joiner rejected with the existing "server full" log line. Exactly
+one probe pass runs per rejected joiner, so a flood of joiners cannot
+turn the accept loop into continuous probing. Tests:
+`TestReserveClientSlotSkipsPruneWhenNotFull`,
+`TestReserveClientSlotPrunesWhenFull` (a `releasingProbeConn` stands
+in for HandleClient's slot release), and
+`TestReserveClientSlotStillFullAfterPrune` (prunes exactly once, still
+rejects). Commit: `9939cb5`; Test + Lint + CodeQL green in CI.
 
 ### 2026-09-24 — `CLIPPORT_ALLOW_PLAINTEXT` headless opt-in
 
