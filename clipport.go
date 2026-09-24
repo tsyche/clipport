@@ -145,6 +145,14 @@ Refer to https://github.com/tsyche/clipport for more information`
 	// pruneStale is what the wake watcher calls; tests stub it to observe runs.
 	pruneStale = pruneStaleClients
 
+	// reserveClientSlotWithPrune polls slotReleaseTries times at
+	// slotReleasePoll after a prune pass, waiting for HandleClient to release
+	// a freed slot (closing a dead conn only unblocks that cleanup — the slot
+	// itself frees a moment later). Total budget ≈ tries × poll; tests shorten
+	// the tries.
+	slotReleasePoll  = 25 * time.Millisecond
+	slotReleaseTries = 20
+
 	// isClientProcess marks the dialing side. Clients never host peers, so
 	// they skip the receive-side re-broadcast in MonitorSentClips — a no-op
 	// across separate processes, but it keeps an in-process loopback test
@@ -815,6 +823,28 @@ func releaseClientSlot() {
 	mu.Unlock()
 }
 
+// reserveClientSlotWithPrune reserves a --max-clients slot. When the server
+// is full it first runs one stale-probe pass (pruneStale) so write-dead peers
+// — e.g. one that never came back after a previous wake — free their slots
+// instead of a healthy joiner being rejected. Slot release is async: closing
+// a dead conn unblocks HandleClient, whose cleanup calls releaseClientSlot a
+// moment later, so after pruning it polls briefly for a slot to open. At most
+// one prune pass runs per call, so a flood of joiners cannot turn this into
+// continuous probing on the accept loop.
+func reserveClientSlotWithPrune() bool {
+	if tryReserveClientSlot() {
+		return true
+	}
+	pruneStale()
+	for i := 0; i < slotReleaseTries; i++ {
+		time.Sleep(slotReleasePoll)
+		if tryReserveClientSlot() {
+			return true
+		}
+	}
+	return false
+}
+
 func makeServer(port string) {
 	info("Starting a new clipboard")
 	listenAddr := ":"
@@ -860,7 +890,7 @@ func makeServer(port string) {
 			handleError(err)
 			return
 		}
-		if !tryReserveClientSlot() {
+		if !reserveClientSlotWithPrune() {
 			infof("Rejecting %s: server full (--max-clients %d)\n", c.RemoteAddr(), maxClients)
 			_ = c.Close()
 			continue

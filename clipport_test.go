@@ -224,6 +224,7 @@ func preserveGlobals(t *testing.T) {
 	oldProbeTimeout := staleProbeTimeout
 	oldWakePoll, oldWakeSettle := serverWakePoll, serverWakeSettle
 	oldPruneStale := pruneStale
+	oldSlotTries := slotReleaseTries
 	oldClientProc := isClientProcess.Load()
 	oversizeFrameReported.Store(false)
 	t.Cleanup(func() {
@@ -247,6 +248,7 @@ func preserveGlobals(t *testing.T) {
 		staleProbeTimeout = oldProbeTimeout
 		serverWakePoll, serverWakeSettle = oldWakePoll, oldWakeSettle
 		pruneStale = oldPruneStale
+		slotReleaseTries = oldSlotTries
 		isClientProcess.Store(oldClientProc)
 	})
 }
@@ -473,6 +475,78 @@ func TestTryReserveClientSlotUnlimitedWhenZero(t *testing.T) {
 		if !tryReserveClientSlot() {
 			t.Fatalf("maxClients=0 must be unlimited; failed at %d", i)
 		}
+	}
+}
+
+func TestReserveClientSlotSkipsPruneWhenNotFull(t *testing.T) {
+	preserveGlobals(t)
+	maxClients, activeConns = 2, 0
+	pruned := 0
+	pruneStale = func() { pruned++ }
+
+	if !reserveClientSlotWithPrune() {
+		t.Fatal("reservation should succeed without pruning when not full")
+	}
+	if pruned != 0 {
+		t.Errorf("prune ran %d times, want 0", pruned)
+	}
+}
+
+// releasingProbeConn stands in for HandleClient's cleanup: closing the dead
+// conn releases the slot that connection still holds, the same way the real
+// HandleClient does a moment after its monitor unblocks.
+type releasingProbeConn struct {
+	fakeProbeConn
+}
+
+func (r *releasingProbeConn) Close() error {
+	r.fakeProbeConn.Close()
+	releaseClientSlot()
+	return nil
+}
+
+// A full server runs one stale-probe pass and reserves the freed slot instead
+// of rejecting the joiner.
+func TestReserveClientSlotPrunesWhenFull(t *testing.T) {
+	preserveGlobals(t)
+	dead := &releasingProbeConn{fakeProbeConn: fakeProbeConn{writeErr: errors.New("broken pipe")}}
+	mu.Lock()
+	maxClients, activeConns = 1, 1
+	listOfClients = []*client{{w: bufio.NewWriter(dead), addr: "dead:1", conn: dead}}
+	mu.Unlock()
+
+	if !reserveClientSlotWithPrune() {
+		t.Fatal("full server should reserve a slot after pruning the write-dead peer")
+	}
+	if !dead.closed.Load() {
+		t.Error("write-dead peer was not closed by the prune pass")
+	}
+	mu.Lock()
+	got := activeConns
+	mu.Unlock()
+	if got != 1 {
+		t.Errorf("activeConns = %d, want 1 (dead slot released, then re-reserved)", got)
+	}
+}
+
+// When pruning frees nothing, the joiner is still rejected — and prune runs
+// exactly once, so a flood of joiners cannot turn the accept loop into
+// continuous probing.
+func TestReserveClientSlotStillFullAfterPrune(t *testing.T) {
+	preserveGlobals(t)
+	slotReleaseTries = 2
+	pruned := 0
+	pruneStale = func() { pruned++ }
+	mu.Lock()
+	maxClients, activeConns = 1, 1
+	listOfClients = nil
+	mu.Unlock()
+
+	if reserveClientSlotWithPrune() {
+		t.Error("reserve should fail when no stale peer frees a slot")
+	}
+	if pruned != 1 {
+		t.Errorf("prune ran %d times, want exactly 1", pruned)
 	}
 }
 
