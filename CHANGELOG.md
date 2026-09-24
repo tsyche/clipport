@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `CLIPPORT_ALLOW_PLAINTEXT=1`: headless opt-in that skips the
+  `Continue? [y/N]` prompt before connecting in plaintext (exact value
+  only; anything else keeps the prompt). A one-line warning prints
+  instead, so scripted plaintext deployments start unattended — pairs
+  with `--quiet`.
+- `clipport key fingerprint`: re-prints this device's own key
+  fingerprint for out-of-band verification (`keygen` refuses to
+  overwrite an existing key, and `known-hosts list` shows peers only).
 - Oversize-frame graceful degradation: a clipboard payload over the 8 MiB
   wire cap no longer drops the sender's connection. Images are re-encoded
   on a downscale × JPEG-quality ladder to fit (headroom for gob/AES-GCM
@@ -34,6 +42,21 @@ status` shows the limit as `Clients (n/max)`.
 
 ### Changed
 
+- Prune on full: when a joiner arrives at a full server, one stale-probe
+  pass runs before the rejection, so `--max-clients` slots held by
+  write-dead peers free immediately and healthy joiners are rarely
+  rejected. Exactly one probe pass runs per rejected joiner.
+- Server wake stale-slot pruning: after the server machine suspends and
+  resumes, it probes every connected peer with an invisible empty frame
+  and closes the write-dead ones, so their `--max-clients` slots free
+  promptly instead of waiting out TCP keepalive (minutes) while a
+  returning peer is rejected as "server full".
+- Local lint parity: `just lintci` runs the same golangci-lint,
+  prettier, markdownlint, and textlint versions super-linter pins in CI,
+  so lint failures are caught before push.
+- End-to-end loopback test: in-process `makeServer` ↔ `ConnectToServer`
+  over a real loopback socket covers startup sync, change propagation,
+  clean FIN shutdown, and the empty-server grace exit.
 - Sleep/wake recovery: the client detects a suspend/resume as a large
   wall-clock gap in its clipboard poll loop, tears the stale connection
   down, and redials immediately (skipping reconnect backoff) instead of
