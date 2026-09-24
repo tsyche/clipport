@@ -43,7 +43,7 @@ lintci:
     echo "== golangci-lint $ver (.golangci.yml matches super-linter template, GOTOOLCHAIN=$GOTOOLCHAIN) =="
     "$dir/golangci-lint" run
     echo "== prettier 3.3.3 =="
-    npx --yes prettier@3.3.3 --check '*.md' 'docs/**/*.md'
+    npx --yes prettier@3.3.3 --check '*.md' 'docs/**/*.md' '*.json' '.github/**/*.yml' '.github/**/*.json'
     echo "== markdownlint-cli 0.41.0 (.markdownlint.json) =="
     npx --yes markdownlint-cli@0.41.0 'docs/**/*.md' '*.md'
     echo "== textlint 14.2.0 + terminology (.textlintrc.json) =="
