@@ -20,15 +20,6 @@ Inferred from the codebase on 2026-06-16 (no prior ROADMAP.md existed); audited 
      re-print _your own_ fingerprint (`known-hosts list` shows trusted peers only). A `clipport key fingerprint` (or a
      line in `clipport status`) closes the TOFU verification loop. Promoted from 2026-09-24 suggestions.
 
-## Inherited from upstream (quackduck/uniclip) — triaged 2026-06-16
-
-Checked the upstream repository's open issues against this fork's actual code (not just assumed carried over). Completed items moved to `docs/ledger/ROADMAP_SHIPPED.md`.
-
-Lower priority / not clearly actionable yet:
-
-- **"use of closed network connection" after Windows hibernation** ([uniclip#32](https://github.com/quackduck/uniclip/issues/32)) — reporter couldn't reliably reproduce; revisit if it recurs for us.
-- Custom-port feature request ([uniclip#20](https://github.com/quackduck/uniclip/issues/20)) is already done in this fork via `-p`/`--port`.
-
 ## New Suggestions (2026-07-02)
 
 1. **Server re-announces or survives an IP change after reassociation** — ~half day, needs design
@@ -113,3 +104,4 @@ Security constraint: remote mode must require `-k`; clear error message if attem
 - 2026-09-24: shipped fuzz CI wiring (Top 3 #1: 60s `FuzzMonitorSentClips` job + `just fuzz`). New Top 3: image clipboard 🧑 scope decision, server wake slot pruning, local lint parity (promoted). Approved three new suggestions (own-key fingerprint, headless plaintext opt-in, fuzz-failure artifact upload); end-to-end loopback test stays in suggestions.
 - 2026-09-24 audit: shipped image clipboard (Top 3 #1, scope decided images-only PNG/JPEG — moved to ledger). Promoted oversize-image graceful degradation to Top 3 #3 (regression risk from shipped images: >8 MiB frames drop the sender link). Approved three new suggestions (GIF/BMP/WebP formats, status payload kind, file-path sync 🧑).
 - 2026-09-24 audit: shipped local lint parity (Top 3 #2: `just lintci` + super-linter-matching configs, commits `2293434`/`5a076d1`). Promoted own-key fingerprint from 2026-09-24 suggestions. New Top 3: server wake pruning, oversize-image degradation, own-key fingerprint — all agent-doable. No new suggestions.
+- 2026-09-24: closed out the last Inherited-from-upstream items (uniclip#20 custom port — already shipped as `-p`/`--port`; uniclip#32 Windows-hibernation disconnect — covered by shipped sleep/wake recovery, reconnect backoff, and `isNetworkDisconnect` handling, not reproducible here). Section removed; both entries archived in the ledger.

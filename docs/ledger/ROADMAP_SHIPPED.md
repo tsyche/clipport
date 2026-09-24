@@ -27,8 +27,29 @@
 - [x] 2026-09-24 — CI fuzz job (`FuzzMonitorSentClips`, 60s loop)
 - [x] 2026-09-24 — PNG/JPEG image clipboard sync
 - [x] 2026-09-24 — Local lint parity script (`just lintci`)
+- [x] 2026-09-24 — Inherited upstream triage closed (uniclip#20, uniclip#32)
 
 ## Archived entries
+
+### 2026-09-24 — Inherited upstream triage closed (uniclip#20, uniclip#32)
+
+Original Inherited-from-upstream section (triaged 2026-06-16), preserved:
+
+Lower priority / not clearly actionable yet:
+
+- **"use of closed network connection" after Windows hibernation** ([uniclip#32](https://github.com/quackduck/uniclip/issues/32)) — reporter couldn't reliably reproduce; revisit if it recurs for us.
+- Custom-port feature request ([uniclip#20](https://github.com/quackduck/uniclip/issues/20)) is already done in this fork via `-p`/`--port`.
+
+Resolutions (2026-09-24):
+
+- **uniclip#20** — closed as shipped in this fork: `-p`/`--port` pins the
+  listen port (`clipport.go` flag registration, `README` intro, `CHANGELOG`).
+- **uniclip#32** — closed as not-reproducible + covered by shipped work: the
+  sleep/wake dead-peer recovery (wake-gap detection → instant redial, 2026-09-23),
+  exponential reconnect backoff (3s→30s, `nextBackoff`), and
+  `isNetworkDisconnect` handling mean a stale connection after resume tears
+  down and redials cleanly instead of erroring. Reopen only if the exact
+  upstream error recurs here.
 
 ### 2026-09-24 — Local lint parity script (`just lintci`)
 
