@@ -34,8 +34,23 @@
 - [x] 2026-09-24 — End-to-end loopback integration test (sync/propagation/FIN/grace exit)
 - [x] 2026-09-24 — `CLIPPORT_ALLOW_PLAINTEXT` headless opt-in (skip plaintext prompt)
 - [x] 2026-09-24 — Prune stale clients when server is full before rejecting
+- [x] 2026-09-24 — Fuzz-failure artifact upload (`testdata/fuzz/…` on CI failure)
 
 ## Archived entries
+
+### 2026-09-24 — Fuzz-failure artifact upload
+
+1. **Fuzz-failure artifact upload** — ~20 minutes
+   - When the CI fuzz job finds a crasher, Go writes it under `testdata/fuzz/…`, but the runner's workspace is
+     discarded. Upload that directory as a workflow artifact on failure so the corpus can be committed and the bug
+     reproduced locally. _(Promoted to Top 3.)_
+
+Shipped: the fuzz job in `.github/workflows/test.yml` gained an
+`actions/upload-artifact@v4` step gated on `failure()` — uploads
+`testdata/fuzz/` as the `fuzz-crashers` artifact (14-day retention,
+`if-no-files-found: ignore` so a failure before checkout doesn't error
+the step). CHANGELOG's fuzz-job entry extended to describe it.
+Commit: `252539c`; Test + Lint + CodeQL green in CI.
 
 ### 2026-09-24 — Prune on full before rejecting
 
