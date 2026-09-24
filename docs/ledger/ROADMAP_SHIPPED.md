@@ -31,8 +31,32 @@
 - [x] 2026-09-24 — Oversize-frame graceful degradation (shrink or skip, never drop link)
 - [x] 2026-09-24 — Server wake stale-slot pruning (empty-frame probe, write-dead close)
 - [x] 2026-09-24 — `clipport key fingerprint` subcommand (own-key TOFU verification)
+- [x] 2026-09-24 — End-to-end loopback integration test (sync/propagation/FIN/grace exit)
 
 ## Archived entries
+
+### 2026-09-24 — End-to-end loopback integration test
+
+1. **End-to-end loopback integration test** — ~2 hours
+   - Unit tests cover monitors, handshake, and cleanup in isolation, but nothing exercises `makeServer` ↔
+     `ConnectToServer` over a real loopback socket end-to-end: startup snapshot sync, clipboard change propagation, and
+     Ctrl+C/FIN shutdown semantics. An in-process end-to-end test would lock the full path down. Promoted from
+     2026-09-24 suggestions — worth locking down after today's image/oversize churn.
+
+Shipped: `TestEndToEndLoopback` runs `makeServer` and `ConnectToServer`
+in one process over a real loopback socket (encrypted `-s`): startup
+snapshot sync, clipboard change propagation through the debounce window,
+clean EOF shutdown (client exits instead of reconnecting — FIN proof;
+Ctrl+C's `os.Exit(0)` handler is untestable in-process, so FIN only), and
+the empty-server grace exit via stubbed `exitProcess`. Seams added:
+`isClientProcess` skips the receive-side re-broadcast on clients (a no-op
+across real processes, prevents the in-process test from echoing frames
+forever), and a `runningServer` handle exposes the live listener plus
+wake-watcher stop/join (`wakeStop`/`wakeDone`) so tests shut the accept
+loop down deterministically. In-process limitation (documented in-test):
+both sides share one clipboard, so `setLocalClip` is record-only in the
+test and direction-specific behavior stays with the unit tests. 10/10
+`-race` runs green. Commit: `0a8b0f7`; Test + Lint + CodeQL green in CI.
 
 ### 2026-09-24 — `clipport key fingerprint` subcommand
 
