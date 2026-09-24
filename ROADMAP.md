@@ -36,7 +36,7 @@ Lower priority / not clearly actionable yet:
 1. **Local lint parity script** — ~1 hour
    - The local machine lacks golangci-lint / prettier / textlint in PATH, so super-linter is the first line of defense and CI failures cost a full push-wait cycle. A `just lintci` (or setup addition) installing pinned versions matching CI would catch GO/PRETTIER/textlint categories before push.
 2. **End-to-end loopback integration test** — ~2 hours
-   - Unit tests cover monitors, handshake, and cleanup in isolation, but nothing exercises `makeServer` ↔ `ConnectToServer` over a real loopback socket end to end: startup snapshot sync, clipboard change propagation, and Ctrl+C/FIN shutdown semantics. An in-process e2e test would lock the full path down.
+   - Unit tests cover monitors, handshake, and cleanup in isolation, but nothing exercises `makeServer` ↔ `ConnectToServer` over a real loopback socket end-to-end: startup snapshot sync, clipboard change propagation, and Ctrl+C/FIN shutdown semantics. An in-process end-to-end test would lock the full path down.
 
 ## Remote Connectivity (Cross-Network)
 
@@ -94,4 +94,4 @@ Security constraint: remote mode must require `-k`; clear error message if attem
 - 2026-09-23: shipped max-clients cap (Top 3 #1, `--max-clients` default 8 / 0=unlimited, pending-handshake slot accounting). New Top 3: debounce, CLI security-model docs, sleep/wake recovery (promoted from 2026-07-02 suggestions). No new suggestions (2026-09-23 batch already approved).
 - 2026-09-23: shipped clipboard debounce (Top 3 #1, 250ms quiet window in `waitClipboardQuiet`; startup snapshot unsent-delayed). New Top 3: CLI security-model docs, sleep/wake recovery, fuzz CI wiring (promoted from 2026-09-22 suggestions). No new suggestions.
 - 2026-09-23: shipped CLI security model section (Top 3 #1, `README` `## Security model` threat coverage; docs-only). New Top 3: sleep/wake recovery, fuzz CI wiring, image clipboard 🧑 needs-human scope decision (promoted from 2026-09-23 suggestions — Top 3 not fully blocked: first two agent-doable). No new suggestions.
-- 2026-09-24: shipped sleep/wake dead-peer recovery (Top 3 #1: client wake-gap → instant redial, server 10s disconnect grace). New Top 3: fuzz CI wiring, image clipboard 🧑 scope decision, server wake slot pruning (promoted from new suggestions). Approved two more new suggestions (local lint parity, e2e loopback test).
+- 2026-09-24: shipped sleep/wake dead-peer recovery (Top 3 #1: client wake-gap → instant redial, server 10s disconnect grace). New Top 3: fuzz CI wiring, image clipboard 🧑 scope decision, server wake slot pruning (promoted from new suggestions). Approved two more new suggestions (local lint parity, end-to-end loopback test).
