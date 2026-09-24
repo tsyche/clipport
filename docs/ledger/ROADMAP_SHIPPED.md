@@ -29,8 +29,34 @@
 - [x] 2026-09-24 — Local lint parity script (`just lintci`)
 - [x] 2026-09-24 — Inherited upstream triage closed (uniclip#20, uniclip#32)
 - [x] 2026-09-24 — Oversize-frame graceful degradation (shrink or skip, never drop link)
+- [x] 2026-09-24 — Server wake stale-slot pruning (empty-frame probe, write-dead close)
 
 ## Archived entries
+
+### 2026-09-24 — Server wake stale-slot pruning
+
+1. **Server wake stale-slot pruning** — ~1-2 hours
+   - After the _server_ machine resumes from sleep, dead client entries hold `--max-clients` slots until TCP keepalive
+     eventually fails them (minutes); a returning peer can be rejected as "server full" the whole time. Prune
+     write-dead/stale clients promptly on server resume — without closing live connections, which would deliver a clean
+     EOF that healthy clients treat as server shutdown and exit (the failure mode deliberately avoided in the shipped
+     sleep/wake work).
+
+Shipped: `watchServerWake` samples the server wall clock every second and,
+after a suspend gap ≥ `wakeGapThreshold` plus a short settle for network
+reassociation, runs `pruneStaleClients`: each listed peer gets one empty
+clipboard frame (`sendClipboard(cl.w, "", cl.key)`) under a 3s write
+deadline — a frame receivers already discard (`MonitorSentClips` drops
+empty payloads), so healthy peers absorb it invisibly. Write-failed peers
+are closed so `HandleClient`'s existing cleanup frees the `--max-clients`
+slot; live peers are never closed (that clean EOF would make them exit),
+and black-holed-but-writable peers fall back to the existing TCP keepalive
+detection. `monitorLocalClip` now sends under `mu`, serializing probes
+with clipboard sends — which also fixes the pre-existing dual-writer race
+on shared `bufio.Writer`s. Tests: `TestPruneStaleClientsClosesWriteDeadPeer`,
+`TestPruneStaleClientsKeepsLivePeer`, `TestPruneStaleClientsSkipsUnlistedClient`,
+`TestPruneStaleClientsLeavesLiveHandleClientRunning`,
+`TestWatchServerWakeTriggersPrune`. Commit: `6b89ca9`; Test + Lint + CodeQL green in CI.
 
 ### 2026-09-24 — Oversize-frame graceful degradation (shrink or skip, never drop link)
 

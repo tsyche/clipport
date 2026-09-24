@@ -84,7 +84,9 @@ re-admitting an unverifiable peer.
 
 The server exits automatically once every connected device has disconnected and none reconnects
 within a short grace period (or on Ctrl+C, which also tells connected clients to exit instead of
-trying to reconnect).
+trying to reconnect). Shortly after the server itself wakes from sleep, it probes each peer with a
+tiny empty frame and closes write-dead connections, freeing their `--max-clients` slot immediately
+instead of waiting minutes for TCP keepalive — live connections are never touched.
 
 ## Security model
 
