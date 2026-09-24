@@ -25,8 +25,29 @@
 - [x] 2026-09-23 — CLI security model section (`README` threat coverage)
 - [x] 2026-09-23 — Sleep/wake dead-peer recovery (wake gap → instant redial)
 - [x] 2026-09-24 — CI fuzz job (`FuzzMonitorSentClips`, 60s loop)
+- [x] 2026-09-24 — PNG/JPEG image clipboard sync
 
 ## Archived entries
+
+### 2026-09-24 — PNG/JPEG image clipboard sync
+
+1. **Image/binary clipboard support** — ~1 day
+   - Text-only by design today: non-text content (e.g. macOS `pbpaste` on an image) returns `""` and never reaches peers; wire frames are `string`-oriented. Upstream users have asked for image paste (uniclip#23 comment thread); extension needs a wire-format change (length-prefixed bytes or type-tagged frames) and platform-native read/write for PNG/JPEG (and possibly files).
+   - 🧑 needs-human: scope decision — images only, images+files, or full multi-format MIME
+
+Shipped with scope decided: **images only (PNG/JPEG)** — no wire-format change
+needed after all: frames were already gob-encoded `[]byte`, and the receiver
+sniffs magic bytes (no type tag). Text reads fall back to platform image
+capture (`osascript` `«data PNGf/JPEGf»` on macOS, `xclip`/`wl-paste` MIME
+targets on Linux, PowerShell `Get-Clipboard -Format Image` on Windows);
+applies via the matching setter. Image-to-image change detection compares
+pixel fingerprints (decode → deterministic PNG re-encode → sha256) so
+lossless re-encodes do not echo between peers. Tests: `TestIsImagePayload`,
+`TestClipboardStateChangedImageRoundtrip`, `TestParseOsascriptData`,
+`TestMonitorLocalClipSendsImagePayload`, `TestMonitorSentClipsAppliesImagePayload`,
+`TestRunSetClipCommandRoutesImageToWriter`. Follow-on risk filed as roadmap
+item: oversize images (>8 MiB frame cap) currently drop the sender link.
+Commits: `e2222e8`, lint fixes `2c77492`; Test + Lint green in CI.
 
 ### 2026-09-24 — CI fuzz job (`FuzzMonitorSentClips`, 60s loop)
 

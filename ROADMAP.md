@@ -1,23 +1,25 @@
 # Roadmap
 
-Inferred from the codebase on 2026-06-16 (no prior ROADMAP.md existed); audited and updated 2026-06-23; audited 2026-09-22; audited 2026-09-23. Single-file Go app — see `clipport.go`, `AGENTS.md`/`CLAUDE.md` for architecture. Shipped history: [`docs/ledger/ROADMAP_SHIPPED.md`](docs/ledger/ROADMAP_SHIPPED.md).
+Inferred from the codebase on 2026-06-16 (no prior ROADMAP.md existed); audited and updated 2026-06-23; audited 2026-09-22; audited 2026-09-23; audited 2026-09-24. Single-file Go app — see `clipport.go`, `AGENTS.md`/`CLAUDE.md` for architecture. Shipped history: [`docs/ledger/ROADMAP_SHIPPED.md`](docs/ledger/ROADMAP_SHIPPED.md).
 
 ## Top 3 Suggested Tasks
 
-1. **Image/binary clipboard support** — ~1 day
-   - Text-only by design today: non-text content (e.g. macOS `pbpaste` on an image) returns `""` and never reaches peers; wire frames are `string`-oriented. Upstream users have asked for image paste (uniclip#23 comment thread); extension needs a wire-format change (length-prefixed bytes or type-tagged frames) and platform-native read/write for PNG/JPEG (and possibly files).
-   - 🧑 needs-human: scope decision — images only, images+files, or full multi-format MIME
-2. **Server wake stale-slot pruning** — ~1-2 hours
+1. **Server wake stale-slot pruning** — ~1-2 hours
    - After the _server_ machine resumes from sleep, dead client entries hold `--max-clients` slots until TCP keepalive
      eventually fails them (minutes); a returning peer can be rejected as "server full" the whole time. Prune
      write-dead/stale clients promptly on server resume — without closing live connections, which would deliver a clean
      EOF that healthy clients treat as server shutdown and exit (the failure mode deliberately avoided in the shipped
      sleep/wake work).
-3. **Local lint parity script** — ~1 hour
+2. **Local lint parity script** — ~1 hour
    - The local machine lacks golangci-lint / prettier / textlint in PATH, so super-linter is the first line of defense
      and CI failures cost a full push-wait cycle (three consecutive red lint runs in the 2026-09-24 session alone). A
      `just lintci` (or setup addition) installing pinned versions matching CI would catch GO/PRETTIER/textlint
      categories before push.
+3. **Oversize-image graceful degradation** — ~1 hour
+   - A screenshot PNG over the 8 MiB frame cap (`maxClipboardFrameBytes`) fails in `sendClipboard`, which breaks that
+     client's connection instead of skipping the frame; peers then reconnect and may loop on the same image. Downscale/
+     re-encode to fit (or skip with a single log line) so huge captures never drop the link. Follow-on from shipped
+     image clipboard support.
 
 ## Inherited from upstream (quackduck/uniclip) — triaged 2026-06-16
 
@@ -44,6 +46,13 @@ Lower priority / not clearly actionable yet:
    - `--quiet` is aimed at launchd/systemd, but plaintext mode still blocks on an interactive `Continue? [y/N]` prompt. An explicit `CLIPPORT_ALLOW_PLAINTEXT=1` env opt-in would let scripted plaintext deployments start unattended without weakening the default gate.
 4. **Fuzz-failure artifact upload** — ~20 minutes
    - When the CI fuzz job finds a crasher, Go writes it under `testdata/fuzz/…`, but the runner's workspace is discarded. Upload that directory as a workflow artifact on failure so the corpus can be committed and the bug reproduced locally.
+5. **GIF/BMP/WebP image formats** — ~1-2 hours
+   - Image sync currently sniffs PNG/JPEG only; extend magic bytes, osascript class data (`GIFf`, `BMPf`), xclip/wl MIME targets, and Windows fallbacks so animated GIFs and WebP screenshots propagate too.
+6. **`clipport status` shows last-synced payload kind** — ~30 minutes
+   - `status` reports a timestamp only; add text vs image and byte size so users can confirm an image actually propagated without watching both terminals.
+7. **File-path clipboard sync** — ~half day
+   - Copying a file in Finder/Explorer puts a path/URI on the clipboard, not bytes; sync the path text so the peer pastes a usable location (same-machine paths aside).
+   - 🧑 needs-human: scope decision — what a cross-OS path should paste as (POSIX vs Windows path, or an error)
 
 ## Remote Connectivity (Cross-Network)
 
@@ -103,3 +112,4 @@ Security constraint: remote mode must require `-k`; clear error message if attem
 - 2026-09-23: shipped CLI security model section (Top 3 #1, `README` `## Security model` threat coverage; docs-only). New Top 3: sleep/wake recovery, fuzz CI wiring, image clipboard 🧑 needs-human scope decision (promoted from 2026-09-23 suggestions — Top 3 not fully blocked: first two agent-doable). No new suggestions.
 - 2026-09-24: shipped sleep/wake dead-peer recovery (Top 3 #1: client wake-gap → instant redial, server 10s disconnect grace). New Top 3: fuzz CI wiring, image clipboard 🧑 scope decision, server wake slot pruning (promoted from new suggestions). Approved two more new suggestions (local lint parity, end-to-end loopback test).
 - 2026-09-24: shipped fuzz CI wiring (Top 3 #1: 60s `FuzzMonitorSentClips` job + `just fuzz`). New Top 3: image clipboard 🧑 scope decision, server wake slot pruning, local lint parity (promoted). Approved three new suggestions (own-key fingerprint, headless plaintext opt-in, fuzz-failure artifact upload); end-to-end loopback test stays in suggestions.
+- 2026-09-24 audit: shipped image clipboard (Top 3 #1, scope decided images-only PNG/JPEG — moved to ledger). Promoted oversize-image graceful degradation to Top 3 #3 (regression risk from shipped images: >8 MiB frames drop the sender link). Approved three new suggestions (GIF/BMP/WebP formats, status payload kind, file-path sync 🧑).
