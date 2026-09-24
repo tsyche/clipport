@@ -32,8 +32,25 @@
 - [x] 2026-09-24 — Server wake stale-slot pruning (empty-frame probe, write-dead close)
 - [x] 2026-09-24 — `clipport key fingerprint` subcommand (own-key TOFU verification)
 - [x] 2026-09-24 — End-to-end loopback integration test (sync/propagation/FIN/grace exit)
+- [x] 2026-09-24 — `CLIPPORT_ALLOW_PLAINTEXT` headless opt-in (skip plaintext prompt)
 
 ## Archived entries
+
+### 2026-09-24 — `CLIPPORT_ALLOW_PLAINTEXT` headless opt-in
+
+1. **Headless plaintext opt-in** — ~30 minutes
+   - `--quiet` is aimed at launchd/systemd, but plaintext mode still blocks on an interactive `Continue? [y/N]` prompt.
+     An explicit `CLIPPORT_ALLOW_PLAINTEXT=1` env opt-in would let scripted plaintext deployments start unattended
+     without weakening the default gate. _(Promoted to Top 3.)_
+
+Shipped: `plaintextOptIn()` gates the `confirmPlaintext()` call in
+`main` — when `CLIPPORT_ALLOW_PLAINTEXT=1` (exact match only; anything
+else keeps the prompt), a one-line warning prints instead of the
+`Continue? [y/N]` prompt and startup proceeds. Verified by CLI smoke
+tests on all three paths (unset → prompt+abort on EOF, `=1` → starts
+with warning, `=true` → still prompts) plus `TestPlaintextOptIn` for
+the value gate. Documented in CLI help and the `README` encryption
+section. Commit: `c509d32`; Test + Lint + CodeQL green in CI.
 
 ### 2026-09-24 — End-to-end loopback integration test
 
