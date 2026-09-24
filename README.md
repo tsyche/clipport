@@ -74,11 +74,15 @@ By default, clipport asks for confirmation before sending your clipboard in plai
 Use one or the other, not both.
 
 Secure connections (`-k` or `-s`) reconnect automatically if the link drops (with exponential
-backoff, 3s up to 30s). A permanent `-k` key mismatch does not retry — fix it with
-`clipport known-hosts remove <peer>` and reconnect. Plaintext connections exit on drop instead
-of reconnecting, to avoid silently re-admitting an unverifiable peer.
+backoff, 3s up to 30s). After the local machine wakes from sleep, the client drops its stale
+connection and redials immediately instead of waiting for TCP keepalive to time out. A permanent
+`-k` key mismatch does not retry — fix it with `clipport known-hosts remove <peer>` and
+reconnect. Plaintext connections exit on drop instead of reconnecting, to avoid silently
+re-admitting an unverifiable peer.
 
-The server exits automatically once every connected device has disconnected (or on Ctrl+C, which also tells connected clients to exit instead of trying to reconnect).
+The server exits automatically once every connected device has disconnected and none reconnects
+within a short grace period (or on Ctrl+C, which also tells connected clients to exit instead of
+trying to reconnect).
 
 ## Security model
 

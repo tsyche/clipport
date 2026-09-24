@@ -18,6 +18,13 @@ status` shows the limit as `Clients (n/max)`.
 
 ### Changed
 
+- Sleep/wake recovery: the client detects a suspend/resume as a large
+  wall-clock gap in its clipboard poll loop, tears the stale connection
+  down, and redials immediately (skipping reconnect backoff) instead of
+  waiting minutes for TCP keepalive probes to time out. The server delays
+  its last-client exit by a short grace period (10s) so that redial is
+  not raced by the shutdown; a reconnecting client or pending handshake
+  cancels the exit.
 - Clipboard changes are debounced (250ms quiet window): a burst of
   rapid edits sends one frame carrying the final value instead of a
   frame per observed change. The initial startup snapshot still sends

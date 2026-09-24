@@ -102,6 +102,30 @@ Refer to https://github.com/tsyche/clipport for more information`
 	// non-text content (image/file) does not spam handleError every poll
 	// (uniclip#23). Cleared when a read succeeds.
 	clipReadErrReported atomic.Bool
+
+	// wakeGapThreshold: a MonitorLocalClip poll iteration that takes at least
+	// this long means the machine suspended mid-poll (sleep/wake). The client
+	// then tears the connection down instead of waiting minutes for TCP
+	// keepalive probes to time out. Package var so tests can reason about it.
+	wakeGapThreshold = 30 * time.Second
+
+	// systemWoke latches when a wake gap was detected; ConnectToServer reads
+	// and clears it to skip reconnect backoff after resume.
+	systemWoke atomic.Bool
+
+	// clockNow is time.Now; tests stub it to fake suspend/resume gaps.
+	clockNow = time.Now
+
+	// emptyDisconnectGrace is how long the server waits after the last client
+	// disconnects before exiting. A waking client closes its stale connection
+	// and redials immediately; without the grace window the server would see
+	// an empty client list for that sub-second gap and exit first, leaving
+	// the client with nobody to reconnect to.
+	emptyDisconnectGrace = 10 * time.Second
+
+	// exitProcess is os.Exit; tests stub it to observe shutdown without
+	// killing the test binary.
+	exitProcess = os.Exit
 )
 
 // maxClipboardFrameBytes caps a single gob-encoded clipboard frame on the
@@ -809,9 +833,27 @@ func HandleClient(c net.Conn) {
 	noClients := len(listOfClients) == 0
 	mu.Unlock()
 	if noClients {
-		info("All devices disconnected. Exiting.")
-		os.Exit(0) //nolint:gocritic // c is already closed above; nothing left for the deferred Close to do
+		// Grace, not instant exit: a peer that just woke from sleep (or hit
+		// a transient blip) closes its stale connection and redials right
+		// away — exiting here would race that redial and orphan the peer.
+		go exitIfStillEmptyAfter(emptyDisconnectGrace)
 	}
+}
+
+// exitIfStillEmptyAfter waits for the disconnect grace period, then shuts the
+// process down if no client has (re)connected in the meantime. Skips the exit
+// while a client is listed or another connection is mid-handshake.
+func exitIfStillEmptyAfter(d time.Duration) {
+	time.Sleep(d)
+	mu.Lock()
+	stillEmpty := len(listOfClients) == 0 && activeConns == 0
+	mu.Unlock()
+	if !stillEmpty {
+		debug("client reconnected during disconnect grace; staying alive")
+		return
+	}
+	info("All devices disconnected. Exiting.")
+	exitProcess(0)
 }
 
 // Connect to the server (which starts a new clipboard), reconnecting
@@ -831,6 +873,12 @@ func ConnectToServer(address string) {
 			// A successful session means the last failure mode is over —
 			// start the next outage at the short delay again.
 			backoff = baseBackoff
+		}
+		if systemWoke.Swap(false) {
+			// Resume from sleep: the old connection was torn down by wake
+			// detection, so redial now instead of honoring stale backoff.
+			info("System resume detected; reconnecting immediately")
+			continue
 		}
 		time.Sleep(backoff)
 		backoff = nextBackoff(backoff, maxBackoff)
@@ -891,10 +939,9 @@ func connectOnce(address string) (retry, reached bool) {
 		_ = c.Close()
 		close(done)
 	}()
-	MonitorLocalClip(bufio.NewWriter(c), key, stopLocal)
+	monitorLocalClip(bufio.NewWriter(c), key, stopLocal, true)
 	_ = c.Close()
 	<-done
-
 	if cleanShutdown {
 		infof("Server at %s shut down. Exiting.\n", address)
 		return false, true
@@ -908,6 +955,14 @@ func connectOnce(address string) (retry, reached bool) {
 	return false, true
 }
 
+// MonitorLocalClip is the server-safe wrapper: same as monitorLocalClip but
+// never wake-detects. A server that closes live connections on resume would
+// make healthy clients see EOF, which they mistake for a clean server
+// shutdown and exit permanently.
+func MonitorLocalClip(w *bufio.Writer, key []byte, stop <-chan struct{}) {
+	monitorLocalClip(w, key, stop, false)
+}
+
 // monitors for changes to the local clipboard and writes them to w.
 // Returns when stop is closed, the write fails, or the connection drops.
 // Empty frames are not put on the wire: getLocalClip returns "" for a
@@ -917,7 +972,11 @@ func connectOnce(address string) (retry, reached bool) {
 // The initial snapshot sends immediately; subsequent changes pass through
 // a quiet-window debounce so a burst of edits puts one frame (the final
 // value) on the wire instead of one per poll.
-func MonitorLocalClip(w *bufio.Writer, key []byte, stop <-chan struct{}) {
+// When checkWake is set (client connections only), a poll iteration that
+// takes wakeGapThreshold or longer is treated as a suspend/resume: systemWoke
+// is latched and the monitor returns, which tears the connection down so the
+// reconnect loop can redial immediately instead of waiting out TCP keepalive.
+func monitorLocalClip(w *bufio.Writer, key []byte, stop <-chan struct{}, checkWake bool) {
 	for {
 		select {
 		case <-stop:
@@ -942,10 +1001,21 @@ func MonitorLocalClip(w *bufio.Writer, key []byte, stop <-chan struct{}) {
 			lastClipPush.Store(time.Now().UnixNano())
 		}
 		for {
+			var iterStart time.Time
+			if checkWake {
+				iterStart = clockNow()
+			}
 			select {
 			case <-stop:
 				return
 			case <-time.After(time.Second * time.Duration(secondsBetweenChecksForClipChange)):
+			}
+			if checkWake {
+				if gap := clockNow().Sub(iterStart); gap >= wakeGapThreshold {
+					debug("system resume detected (poll gap", gap, "); dropping connection")
+					systemWoke.Store(true)
+					return
+				}
 			}
 			// Re-read localClipboard under mu: MonitorSentClips writes it
 			// concurrently when a remote peer updates the clipboard.

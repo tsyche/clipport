@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -211,6 +212,11 @@ func preserveGlobals(t *testing.T) {
 	oldClipPush := lastClipPush.Load()
 	oldMaxClients, oldActive := maxClients, activeConns
 	oldDebounce := clipboardDebounce
+	oldWakeGap := wakeGapThreshold
+	oldWoke := systemWoke.Load()
+	oldClock := clockNow
+	oldGrace := emptyDisconnectGrace
+	oldExit := exitProcess
 	t.Cleanup(func() {
 		secure, keyMode = oldSecure, oldKeyMode
 		password = oldPassword
@@ -223,6 +229,11 @@ func preserveGlobals(t *testing.T) {
 		lastClipPush.Store(oldClipPush)
 		maxClients, activeConns = oldMaxClients, oldActive
 		clipboardDebounce = oldDebounce
+		wakeGapThreshold = oldWakeGap
+		systemWoke.Store(oldWoke)
+		clockNow = oldClock
+		emptyDisconnectGrace = oldGrace
+		exitProcess = oldExit
 	})
 }
 
@@ -999,6 +1010,144 @@ func TestMonitorLocalClipDebouncesRapidChanges(t *testing.T) {
 	}
 	if frames[0] != "one" || frames[1] != "four" {
 		t.Errorf("frames = %v, want [one four] (intermediates suppressed)", frames)
+	}
+}
+
+// A poll iteration spanning wakeGapThreshold means the machine suspended:
+// the client monitor must latch systemWoke and return so connectOnce tears
+// the connection down for an immediate redial.
+func TestMonitorLocalClipWakeGapLatchesAndReturns(t *testing.T) {
+	preserveGlobals(t)
+	secondsBetweenChecksForClipChange = 1
+	stubClipboard(t, func() string { return "hello" })
+	systemWoke.Store(false)
+
+	base := time.Unix(1_700_000_000, 0)
+	var calls atomic.Int64
+	clockNow = func() time.Time {
+		if calls.Add(1) == 1 {
+			return base
+		}
+		return base.Add(60 * time.Second) // simulate a 60s suspend mid-poll
+	}
+
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		monitorLocalClip(bufio.NewWriter(io.Discard), nil, stop, true)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("monitor did not return after wake gap")
+	}
+	if !systemWoke.Load() {
+		t.Error("systemWoke not latched after wake gap")
+	}
+	close(stop)
+}
+
+// The server path (checkWake=false) must never consult the clock — closing
+// live server connections on resume would make healthy clients exit.
+func TestMonitorLocalClipWithoutWakeCheckNeverReadsClock(t *testing.T) {
+	preserveGlobals(t)
+	secondsBetweenChecksForClipChange = 1
+	stubClipboard(t, func() string { return "hello" })
+	systemWoke.Store(false)
+	var clockCalls atomic.Int64
+	clockNow = func() time.Time {
+		clockCalls.Add(1)
+		return time.Now()
+	}
+
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		MonitorLocalClip(bufio.NewWriter(io.Discard), nil, stop)
+		close(done)
+	}()
+
+	// Stay in the poll loop well past one iteration (would trip wake
+	// detection if the clock were consulted with a jumping time).
+	time.Sleep(1500 * time.Millisecond)
+	select {
+	case <-done:
+		t.Fatal("server monitor returned without stop being closed")
+	default:
+	}
+	close(stop)
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("server monitor did not return after stop")
+	}
+	if n := clockCalls.Load(); n != 0 {
+		t.Errorf("clockNow called %d times without wake check, want 0", n)
+	}
+	if systemWoke.Load() {
+		t.Error("systemWoke latched on server path")
+	}
+}
+
+// Last client gone and nothing pending: after the grace period the server
+// must exit(0) — via the stubbed exitProcess, not the real one.
+func TestExitIfStillEmptyAfterExitsWhenEmpty(t *testing.T) {
+	preserveGlobals(t)
+	mu.Lock()
+	listOfClients = nil
+	activeConns = 0
+	mu.Unlock()
+	var mu2 sync.Mutex
+	var codes []int
+	exitProcess = func(code int) {
+		mu2.Lock()
+		codes = append(codes, code)
+		mu2.Unlock()
+	}
+
+	exitIfStillEmptyAfter(50 * time.Millisecond)
+
+	mu2.Lock()
+	defer mu2.Unlock()
+	if len(codes) != 1 || codes[0] != 0 {
+		t.Errorf("exitProcess calls = %v, want [0]", codes)
+	}
+}
+
+// A client that (re)connects during the grace window keeps the server alive.
+func TestExitIfStillEmptyAfterStaysWhenClientPresent(t *testing.T) {
+	preserveGlobals(t)
+	mu.Lock()
+	listOfClients = []*client{{w: bufio.NewWriter(io.Discard), addr: "peer:1"}}
+	activeConns = 0
+	mu.Unlock()
+	var called atomic.Bool
+	exitProcess = func(int) { called.Store(true) }
+
+	exitIfStillEmptyAfter(50 * time.Millisecond)
+
+	if called.Load() {
+		t.Error("exitProcess called despite a connected client")
+	}
+}
+
+// A connection mid-handshake (slot reserved, not yet listed) also aborts the
+// exit — otherwise a waking peer's redial could be raced by the shutdown.
+func TestExitIfStillEmptyAfterStaysWhileHandshakePending(t *testing.T) {
+	preserveGlobals(t)
+	mu.Lock()
+	listOfClients = nil
+	activeConns = 1
+	mu.Unlock()
+	var called atomic.Bool
+	exitProcess = func(int) { called.Store(true) }
+
+	exitIfStillEmptyAfter(50 * time.Millisecond)
+
+	if called.Load() {
+		t.Error("exitProcess called while a connection was pending")
 	}
 }
 
