@@ -63,7 +63,10 @@ State (keys, `known_peers`) lives in `~/.clipport` by default; set `CLIPPORT_DIR
 
 ## Encryption
 
-By default, clipport asks for confirmation before sending your clipboard in plaintext. Two ways to encrypt instead:
+By default, clipport asks for confirmation before sending your clipboard in plaintext. Set
+`CLIPPORT_ALLOW_PLAINTEXT=1` to skip that prompt for headless/scripted runs (launchd/systemd,
+containers) — a one-line warning is printed instead, and the interactive gate stays the default.
+Two ways to encrypt instead:
 
 - **Shared password** (`-s`/`--secure`): prompts for a password, or reads one from the
   `CLIPPORT_SECRET` environment variable if set (set it on both devices to skip the prompt on

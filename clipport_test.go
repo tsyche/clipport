@@ -564,6 +564,29 @@ func TestClipportDirFlagBeatsEnv(t *testing.T) {
 	}
 }
 
+func TestPlaintextOptIn(t *testing.T) {
+	if _, set := os.LookupEnv("CLIPPORT_ALLOW_PLAINTEXT"); set {
+		old := os.Getenv("CLIPPORT_ALLOW_PLAINTEXT")
+		t.Cleanup(func() { os.Setenv("CLIPPORT_ALLOW_PLAINTEXT", old) })
+		os.Unsetenv("CLIPPORT_ALLOW_PLAINTEXT")
+	} else {
+		t.Cleanup(func() { os.Unsetenv("CLIPPORT_ALLOW_PLAINTEXT") })
+	}
+	if plaintextOptIn() {
+		t.Error("unset CLIPPORT_ALLOW_PLAINTEXT must keep the prompt gate")
+	}
+	for _, val := range []string{"", "0", "true", "yes", "1\n"} {
+		t.Setenv("CLIPPORT_ALLOW_PLAINTEXT", val)
+		if plaintextOptIn() {
+			t.Errorf("value %q must not bypass the prompt", val)
+		}
+	}
+	t.Setenv("CLIPPORT_ALLOW_PLAINTEXT", "1")
+	if !plaintextOptIn() {
+		t.Error("CLIPPORT_ALLOW_PLAINTEXT=1 must skip the prompt")
+	}
+}
+
 func TestClipportDirDefaultHome(t *testing.T) {
 	preserveGlobals(t)
 	home := setTestHome(t)

@@ -70,7 +70,8 @@ otherwise you'll be prompted for it. Set CLIPPORT_SECRET on both machines to ski
 With --key, each device uses its own keypair (run ` + "`clipport keygen`" + ` once per device) and no
 secret ever has to be typed or shared; the first connection to a given peer trusts its public key and
 remembers it under ~/.clipport/known_peers, warning loudly if that peer's key ever changes later.
-Connecting without --secure or --key will prompt for confirmation since the clipboard is sent in plaintext.
+Connecting without --secure or --key will prompt for confirmation since the clipboard is sent in plaintext;
+set CLIPPORT_ALLOW_PLAINTEXT=1 to skip that prompt for headless/scripted runs (the default stays interactive).
 State (keys, known_peers) lives in ~/.clipport; override with the CLIPPORT_DIR env var or --dir.
 With --quiet/-q, status chatter is suppressed (errors and interactive prompts still print) — suited to launchd/systemd.
 --max-clients N caps how many peers the server accepts at once (default 8, 0 = unlimited); extras are rejected and logged.
@@ -284,7 +285,9 @@ func main() { //nolint:gocyclo // flag parsing + dispatch; branch count is inher
 	}
 
 	if !secure {
-		if !confirmPlaintext() {
+		if plaintextOptIn() {
+			fmt.Println("Warning: continuing in plaintext (CLIPPORT_ALLOW_PLAINTEXT=1).")
+		} else if !confirmPlaintext() {
 			fmt.Println("Aborted.")
 			return
 		}
@@ -353,6 +356,14 @@ func confirmPlaintext() bool {
 	}
 	line = strings.TrimSpace(strings.ToLower(line))
 	return line == "y" || line == "yes"
+}
+
+// plaintextOptIn reports whether CLIPPORT_ALLOW_PLAINTEXT=1 explicitly skips
+// the interactive plaintext confirmation, so launchd/systemd and other
+// headless deployments can start unattended. Anything but the exact value
+// "1" keeps the prompt gate.
+func plaintextOptIn() bool {
+	return os.Getenv("CLIPPORT_ALLOW_PLAINTEXT") == "1"
 }
 
 // resolveConnectionKey determines the encryption key for a single connection:
