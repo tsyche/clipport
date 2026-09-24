@@ -17,6 +17,7 @@ just build       # compile binary
 just test        # go test -race ./...
 just lint        # go vet ./...
 just lintfix     # gofmt -w .
+just lintci      # super-linter parity (golangci-lint/prettier/textlint/markdownlint, pinned)
 just clean       # remove binary
 just fresh       # clean + build
 just install     # build and install to /usr/local/bin

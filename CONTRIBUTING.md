@@ -17,9 +17,13 @@ just build
 just test      # go test -race ./...
 just lint      # go vet ./...
 just lintfix   # gofmt -w .
+just lintci    # super-linter parity: golangci-lint + prettier + textlint + markdownlint (pinned versions)
 ```
 
-Run `test` and `lint` before opening a PR. See `CLAUDE.md`/`AGENTS.md` for architecture notes and key files.
+Run `test` and `lint` before opening a PR; run `lintci` too if you have
+network access (it downloads pinned tool versions on first use) — it catches
+the GO/PRETTIER/textlint categories that super-linter enforces in CI. See
+`CLAUDE.md`/`AGENTS.md` for architecture notes and key files.
 
 ## Branching
 

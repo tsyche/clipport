@@ -26,6 +26,31 @@ lint:
 lintfix:
     gofmt -w .
 
+# Reproduce super-linter locally (pinned to super-linter v7.1.0 tool versions)
+# so GO/PRETTIER/textlint/markdownlint failures are caught before push.
+lintci:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ver="1.60.3"
+    dir="$HOME/.cache/clipport-tools/golangci-lint-$ver"
+    if [ ! -x "$dir/golangci-lint" ]; then
+        mkdir -p "$dir"
+        curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b "$dir" "v$ver"
+    fi
+    # golangci-lint 1.60.3 (built with go1.23) cannot read newer toolchains'
+    # export data; force the toolchain CI effectively uses (go1.23.x).
+    export GOTOOLCHAIN="${GOLANGCI_GOTOOLCHAIN:-go1.23.12}"
+    echo "== golangci-lint $ver (.golangci.yml matches super-linter template, GOTOOLCHAIN=$GOTOOLCHAIN) =="
+    "$dir/golangci-lint" run
+    echo "== prettier 3.3.3 =="
+    npx --yes prettier@3.3.3 --check '*.md' 'docs/**/*.md'
+    echo "== markdownlint-cli 0.41.0 (.markdownlint.json) =="
+    npx --yes markdownlint-cli@0.41.0 'docs/**/*.md' '*.md'
+    echo "== textlint 14.2.0 + terminology (.textlintrc.json) =="
+    mapfile -t files < <(find . -name '*.md' -not -path './.git/*' | sort)
+    npx --yes --package=textlint@14.2.0 --package=textlint-rule-terminology \
+        --package=textlint-filter-rule-comments textlint "${files[@]}"
+
 # Remove built binary
 clean:
     rm -f clipport
