@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- CI fuzz job: `FuzzMonitorSentClips` now runs its actual fuzzing loop for
+  60s on every push/PR (`just fuzz` locally, same shape), not just the seed
+  corpus — catches gob-decode regressions the static seeds miss.
 - Readme "Security model" section: per-mode threat coverage for
   plaintext vs `-s` (scrypt password) vs `-k` (X25519 TOFU), including
   what plaintext does not protect and the limits of trust-on-first-use.

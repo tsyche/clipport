@@ -14,6 +14,10 @@ build:
 test:
     go test -race ./...
 
+# Fuzz MonitorSentClips for 60s (same shape as the CI fuzz job)
+fuzz:
+    go test -race -run=^$ -fuzz=FuzzMonitorSentClips -fuzztime=60s .
+
 # Run go vet
 lint:
     go vet ./...

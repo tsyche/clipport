@@ -29,3 +29,21 @@ jobs:
 
       - name: Run tests
         run: go test -race ./...
+
+  fuzz:
+    name: Fuzz MonitorSentClips (60s)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # Seed corpus already runs in the test job; this exercises the actual
+      # fuzzing loop to catch decode regressions the static seeds miss.
+      - name: Fuzz MonitorSentClips
+        run: go test -race -run=^$ -fuzz=FuzzMonitorSentClips -fuzztime=60s .
