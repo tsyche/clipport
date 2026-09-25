@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"crypto/ecdh"
 	"encoding/base64"
 	"encoding/gob"
 	"encoding/json"
@@ -1065,10 +1066,99 @@ func TestOwnFingerprintMissingKey(t *testing.T) {
 }
 
 func TestRunKeyCommandUsageErrors(t *testing.T) {
-	for _, args := range [][]string{nil, {"bogus"}, {"fingerprint", "extra"}} {
+	for _, args := range [][]string{nil, {"bogus"}, {"fingerprint", "extra"}, {"rotate", "extra"}} {
 		if err := runKeyCommand(args); err == nil || !strings.Contains(err.Error(), "usage: clipport key fingerprint") {
 			t.Errorf("runKeyCommand(%v) = %v, want usage error", args, err)
 		}
+	}
+}
+
+func TestKeyRotate(t *testing.T) {
+	preserveGlobals(t)
+	setTestHome(t)
+	dir, err := clipportDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := generateKeypair(dir); err != nil {
+		t.Fatalf("generateKeypair: %v", err)
+	}
+	oldRaw, err := os.ReadFile(filepath.Join(dir, "key"))
+	if err != nil {
+		t.Fatalf("read old key: %v", err)
+	}
+	oldPriv, err := ecdh.X25519().NewPrivateKey(oldRaw)
+	if err != nil {
+		t.Fatalf("parse old key: %v", err)
+	}
+
+	if err := runKeyCommand([]string{"rotate"}); err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	fp, err := ownFingerprint()
+	if err != nil {
+		t.Fatalf("ownFingerprint after rotate: %v", err)
+	}
+	if fp == fingerprint(oldPriv.PublicKey().Bytes()) {
+		t.Error("rotate must change the fingerprint")
+	}
+	if _, _, err := generateKeypair(dir); err == nil {
+		t.Error("keygen must still refuse to overwrite the rotated key")
+	}
+}
+
+func TestKeyRotateBackups(t *testing.T) {
+	preserveGlobals(t)
+	setTestHome(t)
+	dir, err := clipportDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := generateKeypair(dir); err != nil {
+		t.Fatalf("generateKeypair: %v", err)
+	}
+	oldRaw, err := os.ReadFile(filepath.Join(dir, "key"))
+	if err != nil {
+		t.Fatalf("read old key: %v", err)
+	}
+
+	if err := runKeyCommand([]string{"rotate"}); err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+
+	allBackups, err := filepath.Glob(filepath.Join(dir, "key.*.bak"))
+	if err != nil {
+		t.Fatalf("glob key backups: %v", err)
+	}
+	var backups []string
+	for _, m := range allBackups {
+		if !strings.HasPrefix(filepath.Base(m), "key.pub.") {
+			backups = append(backups, m)
+		}
+	}
+	if len(backups) != 1 {
+		t.Fatalf("want exactly one key backup, got %v", backups)
+	}
+	backupRaw, err := os.ReadFile(backups[0])
+	if err != nil {
+		t.Fatalf("read backup: %v", err)
+	}
+	if !bytes.Equal(backupRaw, oldRaw) {
+		t.Error("backup must contain the previous private key verbatim")
+	}
+	pubBackups, err := filepath.Glob(filepath.Join(dir, "key.pub.*.bak"))
+	if err != nil || len(pubBackups) != 1 {
+		t.Errorf("want exactly one key.pub backup, got %v (err %v)", pubBackups, err)
+	}
+}
+
+func TestKeyRotateMissingKey(t *testing.T) {
+	preserveGlobals(t)
+	setTestHome(t)
+	if err := runKeyCommand([]string{"rotate"}); err == nil {
+		t.Fatal("rotate with no key must error")
+	} else if !strings.Contains(err.Error(), "keygen") {
+		t.Errorf("error should point at keygen, got: %v", err)
 	}
 }
 

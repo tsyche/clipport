@@ -37,6 +37,7 @@ With Clipport, you can copy from one device and paste on another.
 Usage: clipport [--port/-p] [--secure/-s] [--key/-k] [--debug/-d] [--quiet/-q] [--max-clients N] [ <address> | --help/-h ]
        clipport keygen
        clipport key fingerprint
+       clipport key rotate
        clipport known-hosts [list|remove <peer>]
        clipport status
 Examples:
@@ -49,6 +50,7 @@ Examples:
    clipport -d --secure 192.168.86.24:53701   # join the clipboard with debug output and enable encryption
     clipport keygen                            # generate a clipport keypair for use with --key
     clipport key fingerprint                   # re-print this device's key fingerprint (verify out of band)
+    clipport key rotate                        # back up and regenerate this device's key (peers re-verify)
     clipport -k 192.168.86.24:53701            # join using keypair-based encryption instead of a password
     clipport known-hosts                       # list trusted -k peers
     clipport known-hosts remove 192.168.86.24  # forget a peer (after key rotation; peer IDs are host-only)
@@ -79,6 +81,9 @@ Two ways to encrypt instead:
   key and remembers it under `~/.clipport/known_peers`; if that peer's key ever changes later,
   clipport aborts the connection with a warning instead of silently proceeding. Manage trusted
   peers with `clipport known-hosts` (list) and `clipport known-hosts remove <peer>` (forget).
+  Rotate this device's own key with `clipport key rotate`: the old keypair is backed up to a
+  timestamped `.bak` path, a fresh one is generated, and each peer must
+  `clipport known-hosts remove <this-host>` after verifying the new fingerprint out of band.
 
 Use one or the other, not both.
 

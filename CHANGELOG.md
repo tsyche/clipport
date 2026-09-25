@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `clipport key rotate`: regenerates this device's `-k` keypair safely —
+  the old `key`/`key.pub` are renamed to timestamped `.bak` paths (or
+  restored on failure), a fresh pair is generated, old and new
+  fingerprints print, and a reminder covers the peer side: each peer must
+  `clipport known-hosts remove <this-host>` after verifying the new
+  fingerprint out of band. Before this, rotating meant manually deleting
+  `~/.clipport/key` because `keygen` refuses to overwrite.
 - `--password-file <path>` for `-s`: reads the shared password from a file
   (trailing newline stripped) so scripted deployments neither embed it in a
   command line nor prompt for it. Joins the `CLIPPORT_SECRET` /

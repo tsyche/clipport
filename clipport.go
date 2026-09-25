@@ -47,6 +47,7 @@ With Clipport, you can copy from one device and paste on another.
 Usage: clipport [--port/-p] [--secure/-s] [--key/-k] [--debug/-d] [--quiet/-q] [--max-clients N] [ <address> | --help/-h ]
        clipport keygen
        clipport key fingerprint
+       clipport key rotate
        clipport known-hosts [list|remove <peer>]
        clipport status
 Examples:
@@ -57,8 +58,9 @@ Examples:
    clipport 192.168.86.24 -p 53701            # same as above, host and port given separately
    clipport [fe80::1]:53701                   # join via IPv6 (bracketed form; bare ::1 -p 53701 also works)
    clipport -d --secure 192.168.86.24:53701   # join the clipboard with debug output and enable encryption
-     clipport keygen                            # generate a clipport keypair for use with --key
-     clipport key fingerprint                   # re-print this device's key fingerprint (verify out of band)
+      clipport keygen                            # generate a clipport keypair for use with --key
+      clipport key fingerprint                   # re-print this device's key fingerprint (verify out of band)
+      clipport key rotate                        # back up and regenerate this device's key (peers re-verify)
      clipport -k 192.168.86.24:53701            # join using keypair-based encryption instead of a password
     clipport known-hosts                       # list trusted -k peers
     clipport known-hosts remove 192.168.86.24  # forget a peer (after key rotation; peer IDs are host-only)
@@ -572,19 +574,95 @@ func loadKeypair() (*ecdh.PrivateKey, error) {
 	return ecdh.X25519().NewPrivateKey(raw)
 }
 
-// runKeyCommand implements `clipport key <subcommand>`; currently only
-// `fingerprint`, which re-prints this device's own key fingerprint so users
-// can verify it out of band without regenerating the key (known-hosts list
-// shows trusted peers only, closing half of the TOFU loop).
+// runKeyCommand implements `clipport key <subcommand>`: `fingerprint`
+// re-prints this device's own key fingerprint so users can verify it out of
+// band without regenerating the key (known-hosts list shows trusted peers
+// only, closing half of the TOFU loop); `rotate` backs up the current
+// keypair and generates a fresh one with a peer re-verification reminder.
 func runKeyCommand(args []string) error {
-	if len(args) != 1 || args[0] != "fingerprint" {
-		return errors.New("usage: clipport key fingerprint")
+	if len(args) != 1 {
+		return keyUsage()
 	}
-	fp, err := ownFingerprint()
+	switch args[0] {
+	case "fingerprint":
+		fp, err := ownFingerprint()
+		if err != nil {
+			return err
+		}
+		fmt.Println("Fingerprint:", fp)
+		return nil
+	case "rotate":
+		return rotateKey()
+	default:
+		return keyUsage()
+	}
+}
+
+func keyUsage() error {
+	return errors.New("usage: clipport key fingerprint | clipport key rotate")
+}
+
+// rotateKey replaces the device's keypair: the old private/public key files
+// are renamed to timestamped .bak paths (a recoverable backup, not a
+// destructive overwrite), a fresh keypair is generated, and both
+// fingerprints print. Peers that trusted the old key will fail
+// verification on the next connection until they
+// `clipport known-hosts remove <this-host>` after checking the new
+// fingerprint out of band — hence the reminder.
+func rotateKey() error {
+	dir, err := clipportDir()
 	if err != nil {
 		return err
 	}
-	fmt.Println("Fingerprint:", fp)
+	keyPath := filepath.Join(dir, "key")
+	pubPath := filepath.Join(dir, "key.pub")
+	raw, err := os.ReadFile(keyPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return errors.New("no clipport key found, run `clipport keygen` first")
+		}
+		return err
+	}
+	oldFP := ""
+	if oldPriv, err := ecdh.X25519().NewPrivateKey(raw); err == nil {
+		oldFP = fingerprint(oldPriv.PublicKey().Bytes())
+	}
+	stamp := time.Now().Format("20060102-150405")
+	backup := fmt.Sprintf("%s.%s.bak", keyPath, stamp)
+	if err := os.Rename(keyPath, backup); err != nil {
+		return fmt.Errorf("could not back up existing key: %w", err)
+	}
+	pubBackup := ""
+	if _, err := os.Stat(pubPath); err == nil {
+		pubBackup = fmt.Sprintf("%s.%s.bak", pubPath, stamp)
+		if err := os.Rename(pubPath, pubBackup); err != nil {
+			// Put the private key back so the device is left as it was.
+			if rbErr := os.Rename(backup, keyPath); rbErr != nil {
+				fmt.Fprintln(os.Stderr, "warning: could not restore previous key:", rbErr)
+			}
+			return fmt.Errorf("could not back up existing public key: %w", err)
+		}
+	}
+	newPath, pub, err := generateKeypair(dir)
+	if err != nil {
+		// Restore the previous keypair; nothing has changed on disk yet.
+		if rbErr := os.Rename(backup, keyPath); rbErr != nil {
+			fmt.Fprintln(os.Stderr, "warning: could not restore previous key:", rbErr)
+		}
+		if pubBackup != "" {
+			if rbErr := os.Rename(pubBackup, pubPath); rbErr != nil {
+				fmt.Fprintln(os.Stderr, "warning: could not restore previous public key:", rbErr)
+			}
+		}
+		return fmt.Errorf("could not generate replacement key: %w", err)
+	}
+	fmt.Println("Backed up previous key to", backup)
+	fmt.Println("Generated new clipport key at", newPath)
+	if oldFP != "" {
+		fmt.Println("Previous fingerprint:", oldFP)
+	}
+	fmt.Println("Fingerprint:", fingerprint(pub))
+	fmt.Println("Peers that trusted the previous key will reject it until they run `clipport known-hosts remove <this-host>` after verifying the new fingerprint out of band.")
 	return nil
 }
 
