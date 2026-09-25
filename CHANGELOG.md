@@ -33,6 +33,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (`Clipboard last pushed: 9s ago (image, 41.0 KiB)`), so an image
   propagation can be confirmed without watching both terminals. A status
   server that predates the fields keeps the plain timestamp line.
+- `clipport known-hosts list` shows a last-seen time per trusted peer.
+  Every successful `-k` handshake stamps an optional third column
+  (`<id> <key> <unix-nano>`) in `known_peers`; legacy two-column files
+  keep parsing and show `never` until the peer reconnects.
 - `clipport key rotate`: regenerates this device's `-k` keypair safely —
   the old `key`/`key.pub` are renamed to timestamped `.bak` paths (or
   restored on failure), a fresh pair is generated, old and new

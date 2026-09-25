@@ -71,7 +71,7 @@ Examples:
       clipport key fingerprint                   # re-print this device's key fingerprint (verify out of band)
       clipport key rotate                        # back up and regenerate this device's key (peers re-verify)
      clipport -k 192.168.86.24:53701            # join using keypair-based encryption instead of a password
-    clipport known-hosts                       # list trusted -k peers
+    clipport known-hosts                       # list trusted -k peers and when each was last seen
     clipport known-hosts remove 192.168.86.24  # forget a peer (after key rotation; peer IDs are host-only)
     clipport status                           # list connected clients and stale-prune count
     clipport doctor                           # diagnose clipboard backend, keys, state, and listener
@@ -690,9 +690,20 @@ func ownFingerprint() (string, error) {
 	return fingerprint(priv.PublicKey().Bytes()), nil
 }
 
+// knownPeer is one trusted entry of the known_peers file. The file format is
+// line-based: `<id> <key> [unix-nano]` — the optional third column records
+// last-seen and is omitted (zero) for peers trusted before it existed, so
+// legacy two-column files keep parsing.
+type knownPeer struct {
+	Key      string
+	LastSeen int64 // unix nanos; 0 = never/unknown
+}
+
 // verifyOrTrustPeer implements trust-on-first-connect: the first time a peer
 // ID is seen, its public key is recorded; on later connections, a changed
-// key aborts loudly instead of silently proceeding.
+// key aborts loudly instead of silently proceeding. Every successful
+// handshake stamps the peer's last-seen time (a stamp that fails to save
+// does not fail the handshake — trust was already decided).
 func verifyOrTrustPeer(peerID string, pubKey []byte) error {
 	peersMu.Lock()
 	defer peersMu.Unlock()
@@ -707,15 +718,19 @@ func verifyOrTrustPeer(peerID string, pubKey []byte) error {
 	}
 	encoded := base64.StdEncoding.EncodeToString(pubKey)
 	if existing, ok := peers[peerID]; ok {
-		if existing != encoded {
+		if existing.Key != encoded {
 			return fmt.Errorf("WARNING: public key for %s has changed since the last connection.\n"+
 				"This could mean someone is impersonating that peer, or it legitimately regenerated its key.\n"+
 				"If this is expected, run `clipport known-hosts remove %s` and reconnect (or edit %s by hand)",
 				peerID, peerID, path)
 		}
+		peers[peerID] = knownPeer{Key: existing.Key, LastSeen: time.Now().UnixNano()}
+		if err := saveKnownPeers(path, peers); err != nil {
+			debug("stamping last-seen for", peerID, "failed:", err)
+		}
 		return nil
 	}
-	peers[peerID] = encoded
+	peers[peerID] = knownPeer{Key: encoded, LastSeen: time.Now().UnixNano()}
 	if err := saveKnownPeers(path, peers); err != nil {
 		return err
 	}
@@ -723,8 +738,8 @@ func verifyOrTrustPeer(peerID string, pubKey []byte) error {
 	return nil
 }
 
-func loadKnownPeers(path string) (map[string]string, error) {
-	peers := make(map[string]string)
+func loadKnownPeers(path string) (map[string]knownPeer, error) {
+	peers := make(map[string]knownPeer)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -736,19 +751,29 @@ func loadKnownPeers(path string) (map[string]string, error) {
 		if line == "" {
 			continue
 		}
-		parts := strings.SplitN(line, " ", 2)
-		if len(parts) != 2 {
+		parts := strings.SplitN(line, " ", 3)
+		if len(parts) < 2 {
 			continue
 		}
-		peers[parts[0]] = parts[1]
+		entry := knownPeer{Key: parts[1]}
+		if len(parts) == 3 {
+			if seen, err := strconv.ParseInt(parts[2], 10, 64); err == nil {
+				entry.LastSeen = seen
+			}
+		}
+		peers[parts[0]] = entry
 	}
 	return peers, nil
 }
 
-func saveKnownPeers(path string, peers map[string]string) error {
+func saveKnownPeers(path string, peers map[string]knownPeer) error {
 	var b strings.Builder
-	for id, key := range peers {
-		fmt.Fprintf(&b, "%s %s\n", id, key)
+	for id, p := range peers {
+		if p.LastSeen > 0 {
+			fmt.Fprintf(&b, "%s %s %d\n", id, p.Key, p.LastSeen)
+		} else {
+			fmt.Fprintf(&b, "%s %s\n", id, p.Key)
+		}
 	}
 	return os.WriteFile(path, []byte(b.String()), 0600)
 }
@@ -816,14 +841,28 @@ func listKnownPeers(path string) error {
 	}
 	sort.Strings(ids)
 	for _, id := range ids {
-		pub, err := base64.StdEncoding.DecodeString(peers[id])
+		entry := peers[id]
+		pub, err := base64.StdEncoding.DecodeString(entry.Key)
 		if err != nil {
 			fmt.Printf("%s  (unreadable key)\n", id)
 			continue
 		}
-		fmt.Printf("%s  fingerprint %s\n", id, fingerprint(pub))
+		fmt.Printf("%s  fingerprint %s  last seen %s\n", id, fingerprint(pub), lastSeenLabel(entry.LastSeen))
 	}
 	return nil
+}
+
+// labelNever is the shared "never" label: no last-seen stamp, no pushed
+// clipboard, empty counters.
+const labelNever = "never"
+
+// lastSeenLabel renders a known-hosts last-seen stamp for humans: labelNever
+// for pre-feature entries, otherwise a relative duration like "2m30s ago".
+func lastSeenLabel(unixNano int64) string {
+	if unixNano <= 0 {
+		return labelNever
+	}
+	return time.Since(time.Unix(0, unixNano)).Round(time.Second).String() + " ago"
 }
 
 func fingerprint(pubKey []byte) string {

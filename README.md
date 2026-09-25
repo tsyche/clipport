@@ -53,7 +53,7 @@ Examples:
     clipport key fingerprint                   # re-print this device's key fingerprint (verify out of band)
     clipport key rotate                        # back up and regenerate this device's key (peers re-verify)
     clipport -k 192.168.86.24:53701            # join using keypair-based encryption instead of a password
-    clipport known-hosts                       # list trusted -k peers
+    clipport known-hosts                       # list trusted -k peers and when each was last seen
     clipport known-hosts remove 192.168.86.24  # forget a peer (after key rotation; peer IDs are host-only)
     clipport status                           # list connected clients and stale-prune count
     clipport doctor                           # diagnose clipboard backend, keys, state, and listener
@@ -82,7 +82,8 @@ Two ways to encrypt instead:
   derive a shared secret automatically. The first connection to a given peer trusts its public
   key and remembers it under `~/.clipport/known_peers`; if that peer's key ever changes later,
   clipport aborts the connection with a warning instead of silently proceeding. Manage trusted
-  peers with `clipport known-hosts` (list) and `clipport known-hosts remove <peer>` (forget).
+  peers with `clipport known-hosts` (list, with each peer's last-seen time) and
+  `clipport known-hosts remove <peer>` (forget).
   Rotate this device's own key with `clipport key rotate`: the old keypair is backed up to a
   timestamped `.bak` path, a fresh one is generated, and each peer must
   `clipport known-hosts remove <this-host>` after verifying the new fingerprint out of band.

@@ -1192,14 +1192,18 @@ func TestVerifyOrTrustPeerTOFU(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if peers["10.0.0.9:1234"] == "" {
+	entry, ok := peers["10.0.0.9:1234"]
+	if !ok || entry.Key == "" {
 		t.Fatal("known_peers missing trusted peer")
+	}
+	if entry.LastSeen == 0 {
+		t.Error("trusted peer should have a last-seen stamp after handshake")
 	}
 }
 
 func TestLoadKnownPeersSkipsMalformedLines(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "known_peers")
-	content := "peer-a AAAA\n\nnot-a-peer-line\npeer-b BBBB\n"
+	content := "peer-a AAAA\n\nnot-a-peer-line\npeer-b BBBB\npeer-c CCCC 1758000000123456789\n"
 	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -1207,11 +1211,19 @@ func TestLoadKnownPeersSkipsMalformedLines(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(peers) != 2 {
-		t.Fatalf("got %d peers, want 2 (malformed line skipped): %#v", len(peers), peers)
+	if len(peers) != 3 {
+		t.Fatalf("got %d peers, want 3 (malformed line skipped): %#v", len(peers), peers)
 	}
-	if peers["peer-a"] != "AAAA" || peers["peer-b"] != "BBBB" {
+	if peers["peer-a"].Key != "AAAA" || peers["peer-b"].Key != "BBBB" {
 		t.Errorf("unexpected peers: %#v", peers)
+	}
+	// Legacy two-column lines parse with last-seen zero; the third column
+	// is the optional stamp.
+	if peers["peer-a"].LastSeen != 0 {
+		t.Errorf("peer-a last-seen = %d, want 0 for legacy line", peers["peer-a"].LastSeen)
+	}
+	if peers["peer-c"].LastSeen != 1758000000123456789 {
+		t.Errorf("peer-c last-seen = %d, want parsed stamp", peers["peer-c"].LastSeen)
 	}
 }
 
@@ -1227,7 +1239,10 @@ func TestLoadKnownPeersMissingFile(t *testing.T) {
 
 func TestSaveKnownPeersRoundtrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "known_peers")
-	in := map[string]string{"p1": "K1", "p2": "K2"}
+	in := map[string]knownPeer{
+		"p1": {Key: "K1", LastSeen: 1758000000000000000},
+		"p2": {Key: "K2"}, // legacy-style: no stamp yet
+	}
 	if err := saveKnownPeers(path, in); err != nil {
 		t.Fatal(err)
 	}
@@ -1235,8 +1250,88 @@ func TestSaveKnownPeersRoundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(out) != 2 || out["p1"] != "K1" || out["p2"] != "K2" {
-		t.Errorf("roundtrip mismatch: %#v", out)
+	if len(out) != 2 || out["p1"].Key != "K1" || out["p2"].Key != "K2" {
+		t.Fatalf("roundtrip mismatch: %#v", out)
+	}
+	if out["p1"].LastSeen != 1758000000000000000 || out["p2"].LastSeen != 0 {
+		t.Errorf("last-seen roundtrip mismatch: %#v", out)
+	}
+}
+
+// A reconnect to an already-trusted peer moves its last-seen stamp forward;
+// a key mismatch must NOT (the handshake aborts before stamping).
+func TestVerifyOrTrustPeerRestampsLastSeen(t *testing.T) {
+	preserveGlobals(t)
+	setTestHome(t)
+	dir, err := clipportDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "known_peers")
+	pub := bytes.Repeat([]byte{0x42}, 32)
+	encoded := base64.StdEncoding.EncodeToString(pub)
+	if err := os.WriteFile(path, []byte("10.0.0.9:1234 "+encoded+" 42\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyOrTrustPeer("10.0.0.9:1234", pub); err != nil {
+		t.Fatalf("same-key reconnect: %v", err)
+	}
+	peers, err := loadKnownPeers(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if peers["10.0.0.9:1234"].LastSeen <= 42 {
+		t.Errorf("last-seen = %d, want restamped above the old 42", peers["10.0.0.9:1234"].LastSeen)
+	}
+
+	// Mismatch: rejected, so the stamp must stay as it was.
+	afterStamp := peers["10.0.0.9:1234"].LastSeen
+	changed := bytes.Repeat([]byte{0x99}, 32)
+	if err := verifyOrTrustPeer("10.0.0.9:1234", changed); err == nil {
+		t.Fatal("changed key should be rejected")
+	}
+	peers, err = loadKnownPeers(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if peers["10.0.0.9:1234"].LastSeen != afterStamp {
+		t.Errorf("last-seen = %d after rejected handshake, want unchanged %d", peers["10.0.0.9:1234"].LastSeen, afterStamp)
+	}
+}
+
+func TestLastSeenLabel(t *testing.T) {
+	if got := lastSeenLabel(0); got != labelNever {
+		t.Errorf("lastSeenLabel(0) = %q, want never", got)
+	}
+	if got := lastSeenLabel(-1); got != labelNever {
+		t.Errorf("lastSeenLabel(-1) = %q, want never", got)
+	}
+	got := lastSeenLabel(time.Now().Add(-90 * time.Second).UnixNano())
+	if !strings.HasSuffix(got, " ago") || strings.Contains(got, "never") {
+		t.Errorf("lastSeenLabel(recent) = %q, want a relative ago label", got)
+	}
+}
+
+// `clipport known-hosts list` shows a per-peer last-seen label: stamped
+// entries say how long ago, legacy entries say never.
+func TestListKnownPeersShowsLastSeen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "known_peers")
+	key := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x42}, 32))
+	content := "peer-stamped " + key + " " + strconv.FormatInt(time.Now().Add(-2*time.Minute).UnixNano(), 10) + "\n" +
+		"peer-legacy " + key + "\n"
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	out := captureStdout(t, func() {
+		if err := listKnownPeers(path); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if !strings.Contains(out, "peer-stamped") || !strings.Contains(out, "last seen") || !strings.Contains(out, " ago") {
+		t.Errorf("stamped peer missing last-seen label: %q", out)
+	}
+	if !strings.Contains(out, "peer-legacy") || !strings.Contains(out, "never") {
+		t.Errorf("legacy peer should show last seen never: %q", out)
 	}
 }
 
@@ -3129,9 +3224,9 @@ func TestPermanentErrorClassification(t *testing.T) {
 
 func TestRemoveKnownPeer(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "known_peers")
-	if err := saveKnownPeers(path, map[string]string{
-		"peer-a": "AAAA",
-		"peer-b": "BBBB",
+	if err := saveKnownPeers(path, map[string]knownPeer{
+		"peer-a": {Key: "AAAA"},
+		"peer-b": {Key: "BBBB"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -3145,7 +3240,7 @@ func TestRemoveKnownPeer(t *testing.T) {
 	if _, ok := peers["peer-a"]; ok {
 		t.Error("peer-a should be gone")
 	}
-	if peers["peer-b"] != "BBBB" {
+	if peers["peer-b"].Key != "BBBB" {
 		t.Errorf("peer-b should remain, got %#v", peers)
 	}
 	if err := removeKnownPeer(path, "peer-a"); err == nil {
