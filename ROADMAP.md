@@ -8,12 +8,12 @@ Inferred from the codebase on 2026-06-16 (no prior ROADMAP.md existed); audited 
    - `.goreleaser.yml` is only validated at tag push (`VALIDATE_GO_RELEASER` is disabled in `linter.yml` because
      super-linter's goreleaser v2.2.0 rejects `formats`), so release-config breakage surfaces on release day instead
      of on push; a pinned `goreleaser check` step in CI closes the documented gap. _(Promoted to Top 3.)_
-2. **`clipport status` shows last-synced payload kind** — ~30 minutes
-   - `status` reports a timestamp only; add text vs image and byte size so users can confirm an image actually
-     propagated without watching both terminals. _(Promoted to Top 3.)_
-3. **Last-seen timestamp in `known-hosts list`** — ~30 minutes
-   - After wake-prune work, users have no way to tell whether a trusted peer is still alive from the list alone;
-     record and show a last-seen time per entry (updated on handshake). _(Promoted to Top 3.)_
+2. **`--json` output for status/doctor** — ~40 minutes
+   - Both subcommands print human-oriented lines only; a `--json` mode would let launchd/systemd health checks and
+     scripts parse pid/clients/prune counts and doctor results instead of scraping text. _(Promoted to Top 3.)_
+3. **Headless service docs (launchd/systemd)** — ~45 minutes, docs-only
+   - The shipped `--quiet`/`--password-file`/`CLIPPORT_ALLOW_PLAINTEXT` trio targets launchd/systemd, but `README` has
+     no unit files to copy; add working launchd plist + systemd service examples using them. _(Promoted to Top 3.)_
 
 ## New Suggestions (2026-07-02)
 
@@ -29,19 +29,13 @@ Inferred from the codebase on 2026-06-16 (no prior ROADMAP.md existed); audited 
 
 ## New Suggestions (2026-09-25)
 
-1. **Headless service docs (launchd/systemd)** — ~45 minutes, docs-only
-   - The shipped `--quiet`/`--password-file`/`CLIPPORT_ALLOW_PLAINTEXT` trio targets launchd/systemd, but `README` has
-     no unit files to copy; add working launchd plist + systemd service examples using them.
-2. **State-dir migration helper** — ~45 minutes
+1. **State-dir migration helper** — ~45 minutes
    - Moving to a new machine means hand-copying `~/.clipport` (key + `known_peers`) or redoing TOFU with every peer;
      a documented `clipport` flow (or `clipport key export`/`import`) would move trust state safely.
-3. **`--json` output for status/doctor** — ~40 minutes
-   - Both subcommands print human-oriented lines only; a `--json` mode would let launchd/systemd health checks and
-     scripts parse pid/clients/prune counts and doctor results instead of scraping text.
-4. **Dependabot for Go modules + Actions** — ~15 minutes
+2. **Dependabot for Go modules + Actions** — ~15 minutes
    - No automated dependency-update PRs; a minimal `.github/dependabot.yml` (gomod + `github-actions` ecosystems, weekly)
      keeps `x/image`/`x/sys` and action pins current without manual bumps.
-5. **Extend loopback end-to-end test to image payloads** — ~45 minutes
+3. **Extend loopback end-to-end test to image payloads** — ~45 minutes
    - `TestEndToEndLoopback` proves text sync over a real socket but never sends an image; stage a PNG (and GIF) through
      `getLocalClip`/`applied` to prove image frames cross the wire and land through `setLocalClip` end-to-end.
 
@@ -138,3 +132,6 @@ Security constraint: remote mode must require `-k`; clear error message if attem
   stale-prune count in status (`2dadda2`) — all moved to ledger. New Top 3: CI goreleaser check, status payload
   kind, known-hosts last-seen — all agent-doable. Removed the stale `--version` suggestion (flag + goreleaser
   ldflags already shipped). Approved three new suggestions (`--json` output, Dependabot, end-to-end image payloads).
+- 2026-09-25: shipped status payload kind (Top 3 #2, `recordClipPush` kind+size in the pushed line, commit `dc13323`)
+  and known-hosts last-seen (Top 3 #3, optional third column in `known_peers`, commit `820ad7b`) — both moved to
+  ledger. Promoted `--json` output and headless service docs from suggestions; CI goreleaser check stays Top 3 #1.

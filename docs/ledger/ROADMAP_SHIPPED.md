@@ -41,8 +41,50 @@
 - [x] 2026-09-25 — `clipport doctor` diagnostics subcommand
 - [x] 2026-09-25 — GIF/BMP/WebP image format sync (WebP re-encoded to PNG)
 - [x] 2026-09-25 — Stale-prune count in `clipport status`
+- [x] 2026-09-25 — Status payload kind + size in `clipport status`
+- [x] 2026-09-25 — Last-seen time in `known-hosts list`
 
 ## Archived entries
+
+### 2026-09-25 — Last-seen time in `known-hosts list`
+
+1. **Last-seen timestamp in `known-hosts list`** — ~30 minutes
+   - After wake-prune work, users have no way to tell whether a trusted peer is still alive from the list alone;
+     record and show a last-seen time per entry (updated on handshake). _(Promoted to Top 3.)_
+
+Shipped: `known_peers` lines gained an optional third column
+(`<id> <key> <unix-nano>`) — `loadKnownPeers` returns
+`map[string]knownPeer{Key, LastSeen}` (legacy two-column lines parse
+with zero = never), `saveKnownPeers` omits the column until a stamp
+exists. `verifyOrTrustPeer` restamps on every successful key match
+(save failure logs at debug and does not fail the handshake; a key
+mismatch still aborts before stamping), so existing files migrate on
+their next handshake. `listKnownPeers` prints
+`last seen 2m30s ago` / `never` via `lastSeenLabel` + `labelNever`.
+Help line + `README` (usage + security section) + CHANGELOG updated.
+Tests: TOFU stamp assert, restamp + no-stamp-on-mismatch, 3-column
+load/save roundtrip, `TestLastSeenLabel`, `TestListKnownPeersShowsLastSeen`.
+Live smoke against a legacy file. Commit: `820ad7b`; Test + Lint +
+CodeQL + Docs green in CI.
+
+### 2026-09-25 — Status payload kind + size in `clipport status`
+
+1. **`clipport status` shows last-synced payload kind** — ~30 minutes
+   - `status` reports a timestamp only; add text vs image and byte size so users can confirm an image actually
+     propagated without watching both terminals. _(Promoted to Top 3.)_
+
+Shipped: `recordClipPush` stamps `lastClipKind`
+(`clipKindText`/`clipKindImage`, derived by magic sniff) and
+`lastClipBytes` alongside `lastClipPush` on every successfully pushed
+frame (extracted from `monitorLocalClip` to keep gocyclo ≤ 15).
+`statusSnapshot` gained `last_clip_kind`/`last_clip_bytes`;
+`runStatus` prints `Clipboard last pushed: 9s ago (image, 41.0 KiB)`
+and falls back to the plain timestamp line when the kind is empty
+(older status server). `formatByteSize` helper (B/KiB/MiB/GiB).
+Tests: monitor pushes assert kind+size for text and image payloads,
+snapshot + serve-roundtrip coverage, `TestRunStatusPayloadLine`
+(incl. fallback), `TestFormatByteSize`. Commit: `dc13323`; Test +
+Lint + CodeQL + Docs green in CI.
 
 ### 2026-09-25 — Stale-prune count in `clipport status`
 
