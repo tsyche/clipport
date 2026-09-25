@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `clipport doctor`: read-only diagnostics that turn first-run failures into
+  named checks — clipboard backend on PATH (Wayland/X11/macOS/Windows), state
+  dir, keypair presence + fingerprint, trusted `known-hosts` count, whether a
+  server is running, and listener reachability (dial a running server on
+  loopback, or test-bind the `-p` port / an ephemeral port). Exits 1 when any
+  check fails.
 - `clipport key rotate`: regenerates this device's `-k` keypair safely —
   the old `key`/`key.pub` are renamed to timestamped `.bak` paths (or
   restored on failure), a fresh pair is generated, old and new

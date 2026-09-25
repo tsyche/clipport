@@ -50,6 +50,7 @@ Usage: clipport [--port/-p] [--secure/-s] [--key/-k] [--debug/-d] [--quiet/-q] [
        clipport key rotate
        clipport known-hosts [list|remove <peer>]
        clipport status
+       clipport doctor
 Examples:
    clipport                                   # start a new clipboard with randomized port
    clipport -p 6666                           # start a new clipboard on a set port number
@@ -65,6 +66,7 @@ Examples:
     clipport known-hosts                       # list trusted -k peers
     clipport known-hosts remove 192.168.86.24  # forget a peer (after key rotation; peer IDs are host-only)
     clipport status                           # list connected clients of the running server
+    clipport doctor                           # diagnose clipboard backend, keys, state, and listener
 Running just ` + "`clipport`" + ` will start a new clipboard.
 It will also provide an address with which you can connect to the same clipboard with another device.
 With --secure, the password is read from --password-file, the CLIPPORT_SECRET (or
@@ -283,6 +285,10 @@ func main() { //nolint:gocyclo // flag parsing + dispatch; branch count is inher
 	}
 	if len(args) == 1 && args[0] == "status" {
 		runStatus()
+		return
+	}
+	if len(args) == 1 && args[0] == "doctor" {
+		runDoctor(port)
 		return
 	}
 	if len(args) > 1 {
@@ -943,6 +949,179 @@ func runStatus() {
 		ago := time.Since(time.Unix(0, st.LastClipPush)).Round(time.Second)
 		fmt.Printf("Clipboard last pushed: %s ago\n", ago)
 	}
+}
+
+// doctorCheck is one diagnostic result `clipport doctor` reports. status is
+// doctorOK or doctorFail; only doctorFail makes the command exit non-zero.
+type doctorCheck struct {
+	status string
+	name   string
+	detail string
+}
+
+// doctorOK/doctorFail are the doctorCheck status values.
+const (
+	doctorOK   = "ok"
+	doctorFail = "fail"
+)
+
+// runDoctor implements `clipport doctor`: a read-only diagnostic battery
+// (clipboard backend, state dir, keypair, known-hosts, running server,
+// listener reachability) that points first-run failures at the fix. Direct
+// subcommand output, not gated by --quiet; exits 1 if any check fails.
+func runDoctor(port string) {
+	checks := collectDoctorChecks(port)
+	fails := 0
+	for _, c := range checks {
+		if c.status == doctorFail {
+			fails++
+		}
+		fmt.Printf("  %-4s %s: %s\n", c.status, c.name, c.detail)
+	}
+	fmt.Printf("%d checks, %d failure(s)\n", len(checks), fails)
+	if fails > 0 {
+		os.Exit(1)
+	}
+}
+
+// collectDoctorChecks runs the diagnostic battery. port is the -p flag value
+// ("" when unpinned; only used for the bind test when no server runs).
+func collectDoctorChecks(port string) []doctorCheck {
+	checks := make([]doctorCheck, 0, 6)
+	if detail, err := clipboardBackendDetail(); err != nil {
+		checks = append(checks, doctorCheck{doctorFail, "clipboard backend", err.Error()})
+	} else {
+		checks = append(checks, doctorCheck{doctorOK, "clipboard backend", detail})
+	}
+	dir, err := clipportDir()
+	if err != nil {
+		return append(checks, doctorCheck{doctorFail, "state dir", err.Error()})
+	}
+	perm := "missing"
+	if fi, statErr := os.Stat(dir); statErr == nil {
+		perm = fmt.Sprintf("mode %04o", fi.Mode().Perm())
+	}
+	checks = append(checks, doctorCheck{doctorOK, "state dir", fmt.Sprintf("%s (%s)", dir, perm)})
+	checks = append(checks, doctorKeypairCheck(dir))
+	peers, err := loadKnownPeers(filepath.Join(dir, "known_peers"))
+	if err != nil {
+		checks = append(checks, doctorCheck{doctorFail, "known-hosts", err.Error()})
+	} else {
+		checks = append(checks, doctorCheck{doctorOK, "known-hosts", fmt.Sprintf("%d trusted peer(s)", len(peers))})
+	}
+	serverPort := ""
+	if st, stErr := queryStatus(dir); stErr == nil {
+		serverPort = st.Port
+		checks = append(checks, doctorCheck{doctorOK, "server",
+			fmt.Sprintf("running (pid %d, port %s, %d client(s))", st.Pid, st.Port, len(st.Clients))})
+	} else {
+		checks = append(checks, doctorCheck{doctorOK, "server", "not running (start one with `clipport`)"})
+	}
+	return append(checks, doctorListenerCheck(port, serverPort))
+}
+
+// clipboardBackendDetail reports which clipboard tools the platform will use,
+// failing when none of the supported backends are on PATH — the same absence
+// that would make runGetClipCommand/runSetClipCommand exit at runtime. Probe
+// only: never reads or writes the clipboard.
+func clipboardBackendDetail() (string, error) {
+	switch runtime.GOOS {
+	case osDarwin:
+		if err := requireOnPATH("pbpaste", "pbcopy"); err != nil {
+			return "", fmt.Errorf("clipboard tool(s) missing from PATH: %w", err)
+		}
+		return "pbpaste/pbcopy (macOS)", nil
+	case "windows": //nolint // literal "windows" is used in multiple switches
+		if err := requireOnPATH("powershell.exe", "clip"); err != nil {
+			return "", fmt.Errorf("clipboard tool(s) missing from PATH: %w", err)
+		}
+		return "powershell/clip (Windows)", nil
+	default:
+		return linuxBackendDetail()
+	}
+}
+
+// requireOnPATH returns an error naming every tool not found on PATH.
+func requireOnPATH(names ...string) error {
+	var missing []string
+	for _, name := range names {
+		if _, err := exec.LookPath(name); err != nil {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) > 0 {
+		return errors.New(strings.Join(missing, ", "))
+	}
+	return nil
+}
+
+// linuxBackendDetail resolves the get/set tools through the same
+// linuxClipboardCommand picker the monitors use, so doctor reports exactly
+// what a session (Wayland or X11) would run.
+func linuxBackendDetail() (string, error) {
+	getCmd, err := linuxClipboardCommand(true)
+	if err != nil {
+		return "", errors.New("no clipboard tool found — install xclip, xsel, wl-clipboard, or Termux:API")
+	}
+	setCmd, err := linuxClipboardCommand(false)
+	if err != nil {
+		return "", errors.New("no clipboard writer found — install xclip, xsel, wl-clipboard, or Termux:API")
+	}
+	detail := cmdToolName(getCmd) + "/" + cmdToolName(setCmd)
+	if os.Getenv("WAYLAND_DISPLAY") != "" {
+		detail += " (Wayland session)"
+	}
+	return detail, nil
+}
+
+func cmdToolName(c *exec.Cmd) string {
+	if c != nil && len(c.Args) > 0 {
+		return c.Args[0]
+	}
+	return "?"
+}
+
+// doctorKeypairCheck reports keypair presence: absent is OK (the key is only
+// needed for -k mode), but an unreadable/corrupt key file is a failure.
+func doctorKeypairCheck(dir string) doctorCheck {
+	if _, err := os.Stat(filepath.Join(dir, "key")); err != nil {
+		if os.IsNotExist(err) {
+			return doctorCheck{doctorOK, "keypair", "absent (needed only for -k mode; run `clipport keygen`)"}
+		}
+		return doctorCheck{doctorFail, "keypair", err.Error()}
+	}
+	fp, err := ownFingerprint()
+	if err != nil {
+		return doctorCheck{doctorFail, "keypair", err.Error()}
+	}
+	return doctorCheck{doctorOK, "keypair", "present (fingerprint " + fp + ")"}
+}
+
+// doctorListenerCheck verifies the port clipport would listen on: with a
+// running server, dial it on loopback; otherwise try to bind (the -p port if
+// given, else an ephemeral one). A pinned port already taken by another
+// process is a common first-run failure mode and shows up as a bind error.
+func doctorListenerCheck(port, serverPort string) doctorCheck {
+	if serverPort != "" {
+		conn, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", serverPort), 2*time.Second)
+		if err != nil {
+			return doctorCheck{doctorFail, "listener",
+				"server port " + serverPort + " not reachable on loopback: " + err.Error()}
+		}
+		_ = conn.Close()
+		return doctorCheck{doctorOK, "listener", "server port " + serverPort + " reachable on loopback"}
+	}
+	addr, label := ":0", "ephemeral port"
+	if port != "" {
+		addr, label = ":"+port, "port "+port
+	}
+	l, err := net.Listen("tcp", addr) //nolint // all-interfaces bind mirrors makeServer; this is a doctor bind test, not a public service
+	if err != nil {
+		return doctorCheck{doctorFail, "listener", "cannot bind " + label + ": " + err.Error()}
+	}
+	bound := strconv.Itoa(l.Addr().(*net.TCPAddr).Port)
+	_ = l.Close()
+	return doctorCheck{doctorOK, "listener", "can bind " + label + " (" + bound + ")"}
 }
 
 // tryReserveClientSlot accounts one more accepted connection against

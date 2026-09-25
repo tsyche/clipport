@@ -672,6 +672,158 @@ func TestRunStatusNoServerErrorIsNotSilent(t *testing.T) {
 	}
 }
 
+// fakeClipboardPATH points PATH at stub tools for the current platform so
+// clipboardBackendDetail's LookPath probes succeed (stubs are never executed).
+func fakeClipboardPATH(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	switch runtime.GOOS {
+	case "darwin":
+		writeFakeBin(t, dir, "pbpaste")
+		writeFakeBin(t, dir, "pbcopy")
+	case "windows":
+		// LookPath on windows only checks presence, not content
+		for _, name := range []string{"powershell.exe", "clip"} {
+			if err := os.WriteFile(filepath.Join(dir, name), nil, 0o755); err != nil {
+				t.Fatalf("write fake %s: %v", name, err)
+			}
+		}
+	default:
+		// xclip is first in the get and set order, one stub covers both
+		writeFakeBin(t, dir, "xclip")
+	}
+	t.Setenv("PATH", dir)
+	t.Setenv("WAYLAND_DISPLAY", "")
+}
+
+func TestClipboardBackendDetailMissingTools(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("WAYLAND_DISPLAY", "")
+	if _, err := clipboardBackendDetail(); err == nil {
+		t.Fatal("expected error when no clipboard tool is on PATH")
+	}
+}
+
+func TestClipboardBackendDetailReportsTool(t *testing.T) {
+	fakeClipboardPATH(t)
+	detail, err := clipboardBackendDetail()
+	if err != nil {
+		t.Fatalf("clipboardBackendDetail: %v", err)
+	}
+	if detail == "" {
+		t.Fatal("empty backend detail")
+	}
+}
+
+func TestCollectDoctorChecksNoServerAllOK(t *testing.T) {
+	preserveGlobals(t)
+	setTestHome(t)
+	fakeClipboardPATH(t)
+	checks := collectDoctorChecks("")
+	wantNames := []string{"clipboard backend", "state dir", "keypair", "known-hosts", "server", "listener"}
+	if len(checks) != len(wantNames) {
+		t.Fatalf("got %d checks, want %d: %+v", len(checks), len(wantNames), checks)
+	}
+	for i, want := range wantNames {
+		if checks[i].name != want {
+			t.Errorf("check %d = %q, want %q", i, checks[i].name, want)
+		}
+		if checks[i].status == "fail" {
+			t.Errorf("check %q failed: %s", checks[i].name, checks[i].detail)
+		}
+	}
+	if !strings.Contains(checks[2].detail, "absent") {
+		t.Errorf("keypair detail = %q, want absent", checks[2].detail)
+	}
+	if !strings.Contains(checks[4].detail, "not running") {
+		t.Errorf("server detail = %q, want not running", checks[4].detail)
+	}
+}
+
+func TestCollectDoctorChecksKeyPairPresent(t *testing.T) {
+	preserveGlobals(t)
+	setTestHome(t)
+	fakeClipboardPATH(t)
+	dir, err := clipportDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := generateKeypair(dir); err != nil {
+		t.Fatalf("generateKeypair: %v", err)
+	}
+	for _, c := range collectDoctorChecks("") {
+		if c.name == "keypair" {
+			if c.status != "ok" || !strings.Contains(c.detail, "present (fingerprint") {
+				t.Errorf("keypair check = %+v, want ok present with fingerprint", c)
+			}
+			return
+		}
+	}
+	t.Fatal("keypair check not found")
+}
+
+func TestCollectDoctorChecksListenerBusy(t *testing.T) {
+	preserveGlobals(t)
+	setTestHome(t)
+	fakeClipboardPATH(t)
+	held, err := net.Listen("tcp", ":0")
+	if err != nil {
+		t.Fatalf("hold port: %v", err)
+	}
+	defer held.Close()
+	port := strconv.Itoa(held.Addr().(*net.TCPAddr).Port)
+	for _, c := range collectDoctorChecks(port) {
+		if c.name == "listener" {
+			if c.status != "fail" || !strings.Contains(c.detail, "cannot bind") {
+				t.Errorf("listener check = %+v, want fail cannot bind", c)
+			}
+			return
+		}
+	}
+	t.Fatal("listener check not found")
+}
+
+func TestCollectDoctorChecksRunningServer(t *testing.T) {
+	preserveGlobals(t)
+	setTestHome(t)
+	fakeClipboardPATH(t)
+	dir, err := clipportDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tcp, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("tcp listener: %v", err)
+	}
+	defer tcp.Close()
+	port := strconv.Itoa(tcp.Addr().(*net.TCPAddr).Port)
+	statusL, err := net.Listen("unix", statusSocketPath(dir))
+	if err != nil {
+		t.Skipf("unix sockets unavailable: %v", err)
+	}
+	defer statusL.Close()
+	go serveStatus(statusL, port)
+	checks := collectDoctorChecks("")
+	var server, listener *doctorCheck
+	for i := range checks {
+		switch checks[i].name {
+		case "server":
+			server = &checks[i]
+		case "listener":
+			listener = &checks[i]
+		}
+	}
+	if server == nil || listener == nil {
+		t.Fatalf("server/listener checks missing: %+v", checks)
+	}
+	if server.status != "ok" || !strings.Contains(server.detail, "running (pid") {
+		t.Errorf("server check = %+v, want running", *server)
+	}
+	if listener.status != "ok" || !strings.Contains(listener.detail, "reachable on loopback") {
+		t.Errorf("listener check = %+v, want reachable", *listener)
+	}
+}
+
 func TestClipportDirEnvOverride(t *testing.T) {
 	preserveGlobals(t)
 	setTestHome(t)

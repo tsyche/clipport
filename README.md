@@ -40,6 +40,7 @@ Usage: clipport [--port/-p] [--secure/-s] [--key/-k] [--debug/-d] [--quiet/-q] [
        clipport key rotate
        clipport known-hosts [list|remove <peer>]
        clipport status
+       clipport doctor
 Examples:
    clipport                                   # start a new clipboard with randomized port
    clipport -p 6666                           # start a new clipboard on a set port number
@@ -55,6 +56,7 @@ Examples:
     clipport known-hosts                       # list trusted -k peers
     clipport known-hosts remove 192.168.86.24  # forget a peer (after key rotation; peer IDs are host-only)
     clipport status                           # list connected clients of the running server
+    clipport doctor                           # diagnose clipboard backend, keys, state, and listener
 Running just `clipport` will start a new clipboard.
 It will also provide an address with which you can connect to the same clipboard with another device.
 ```
