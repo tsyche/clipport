@@ -26,7 +26,7 @@ lint:
 lintfix:
     gofmt -w .
 
-# Super-linter parity: golangci-lint/prettier/textlint/markdownlint/shfmt, pinned (catch CI lint failures before push)
+# Super-linter parity: golangci-lint/prettier/textlint/markdownlint/shfmt/actionlint, pinned (catch CI lint failures before push)
 lintci:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -58,6 +58,9 @@ lintci:
         echo "$unformatted"
         exit 1
     fi
+    echo "== actionlint v1.7.12 (super-linter GITHUB_ACTIONS parity, config actionlint.yml) =="
+    # golangci-lint above pins GOTOOLCHAIN=go1.23; actionlint needs >=1.25.
+    GOTOOLCHAIN=auto go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -config-file actionlint.yml
 
 # Validate documentation claims (agent-doc sync, just-recipe references, links, docs TL;DRs)
 check-docs:

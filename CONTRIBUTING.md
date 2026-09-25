@@ -17,13 +17,13 @@ just build
 just test      # go test -race ./...
 just lint      # go vet ./...
 just lintfix   # gofmt -w .
-just lintci    # super-linter parity: golangci-lint + prettier + textlint + markdownlint + shfmt (pinned versions)
+just lintci    # super-linter parity: golangci-lint + prettier + textlint + markdownlint + shfmt + actionlint (pinned versions)
 just check-docs # validate doc claims (agent-doc sync, just-recipe refs, links)
 ```
 
 Run `test`, `lint`, and `check-docs` before opening a PR; run `lintci` too if you have
 network access (it downloads pinned tool versions on first use) — it catches
-the GO/PRETTIER/textlint/markdownlint/SHELL_SHFMT categories that super-linter enforces in CI. See
+the GO/PRETTIER/textlint/markdownlint/SHELL_SHFMT/GITHUB_ACTIONS categories that super-linter enforces in CI. See
 `CLAUDE.md`/`AGENTS.md` for architecture notes and key files.
 
 ## Branching

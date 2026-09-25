@@ -1,0 +1,11 @@
+# Config for actionlint. Super-linter passes this file explicitly
+# (GITHUB_ACTIONS_CONFIG_FILE defaults to actionlint.yml at the repo root);
+# local `just lintci` passes it via -config-file.
+#
+# The pinned super-linter's actionlint ships a stale runner-label list that
+# predates ubuntu-26.04, so the label check needs the extra entry — declare it
+# here. actionlint only offers the self-hosted labels list as an extension
+# point for runner labels; the label itself is GitHub-hosted.
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04

@@ -71,8 +71,8 @@ status` shows the limit as `Clients (n/max)`.
   promptly instead of waiting out TCP keepalive (minutes) while a
   returning peer is rejected as "server full".
 - Local lint parity: `just lintci` runs the same golangci-lint,
-  prettier, markdownlint, textlint, and shfmt versions super-linter pins
-  in CI, so lint failures are caught before push.
+  prettier, markdownlint, textlint, shfmt, and actionlint checks
+  super-linter pins in CI, so lint failures are caught before push.
 - End-to-end loopback test: in-process `makeServer` ↔ `ConnectToServer`
   over a real loopback socket covers startup sync, change propagation,
   clean FIN shutdown, and the empty-server grace exit.
