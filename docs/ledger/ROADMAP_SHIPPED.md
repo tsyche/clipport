@@ -35,8 +35,65 @@
 - [x] 2026-09-24 — `CLIPPORT_ALLOW_PLAINTEXT` headless opt-in (skip plaintext prompt)
 - [x] 2026-09-24 — Prune stale clients when server is full before rejecting
 - [x] 2026-09-24 — Fuzz-failure artifact upload (`testdata/fuzz/…` on CI failure)
+- [x] 2026-09-25 — `--password-file` for `-s` secure mode (+ `CLIPPORT_SECRET` env path)
+- [x] 2026-09-25 — Prune-pass cooldown on the accept loop (one probe pass per 5s)
+- [x] 2026-09-25 — `clipport key rotate` subcommand (backup + regenerate)
 
 ## Archived entries
+
+### 2026-09-25 — `clipport key rotate` subcommand
+
+1. **`clipport key rotate` helper** — ~20 minutes
+   - `keygen` refuses to overwrite an existing key, so rotating today means manually removing `~/.clipport/key`; a
+     `clipport key rotate` subcommand would regenerate safely and remind the user to re-verify fingerprints with peers.
+     Follow-on from shipped own-key fingerprint work. _(Promoted to Top 3.)_
+
+Shipped: `clipport key rotate` dispatches through `runKeyCommand`
+(usage now `clipport key fingerprint | clipport key rotate`) →
+`rotateKey`: backs up `key`/`key.pub` to timestamped `.bak` files
+(`<name>.<YYYYMMDD-HHMMSS>.bak`, restored with stderr warnings if
+regeneration fails), regenerates the X25519 keypair, and prints old +
+new fingerprints plus the `clipport known-hosts remove <this-host>`
+reminder for peers. Documented in CLI help and `README` (usage blocks +
+encryption section); CHANGELOG entry added. Tests: `TestKeyRotate`,
+`TestKeyRotateBackups`, `TestKeyRotateMissingKey`,
+`TestRunKeyCommandUsageErrors` (extended). Commit: `f1c0627`; Test +
+Lint + CodeQL green in CI.
+
+### 2026-09-25 — Prune-pass cooldown on the accept loop
+
+1. **Prune-pass cooldown on the accept loop** — ~20 minutes
+   - Follow-on to shipped prune-on-full: every rejected joiner triggers one stale-probe pass, so a flood of joiners at
+     capacity serializes probe writes under the global clipboard lock. A shared minimum interval between passes keeps
+     probe traffic bounded while preserving the slot-reclaim benefit. _(Promoted to Top 3.)_
+
+Shipped: `prunePassCooldown = 5 * time.Second` gate — `prunePassDue()`
+checks the shared `lastPrunePass` atomic stamp and `runPrunePass()`
+stamps before probing; `reserveClientSlotWithPrune` gates only the
+probe (its slot-wait poll always runs) and the server wake path shares
+the same stamp via `runPrunePass()`, so wake and accept-loop passes
+cannot stampede each other. `preserveGlobals` resets/restores
+cooldown + stamp so tests stay hermetic. Tests:
+`TestPrunePassCooldownOnAcceptLoop`,
+`TestPrunePassCooldownSharedWithWake`. CHANGELOG's "one pass per
+joiner" claim corrected. Commit: `ade0dba`; Test + Lint + CodeQL
+green in CI.
+
+### 2026-09-25 — `--password-file` for `-s` secure mode
+
+1. **`CLIPPORT_PASSWORD` env / `--password-file` for `-s`** — ~30 minutes
+   - `-s` reads the shared password from an interactive prompt, so scripted secure deployments either fall back to
+     plaintext or embed the password in launchd/systemd command lines. Reading it from an env var or file pairs with
+     the headless plaintext opt-in for unattended secure mode too. _(Promoted to Top 3.)_
+
+Shipped: `passwordFromSources(file)` reads `--password-file`
+(trailing `\r\n` stripped; empty/missing file errors) with the env
+half (`CLIPPORT_SECRET`/`CLIPPORT_PASSWORD`) existing already;
+file + env together or both env names set → mutual-exclusion error;
+`--password-file` rejected without `-s` or with `-k`. Flag var
+`passwordFile`, help text + `README` updated. Tests:
+`TestPasswordFromFile`, `TestPasswordEnvSources`. Commit: `1a81f27`;
+Test + Lint + CodeQL green in CI.
 
 ### 2026-09-24 — Fuzz-failure artifact upload
 

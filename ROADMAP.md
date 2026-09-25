@@ -1,21 +1,20 @@
 # Roadmap
 
-Inferred from the codebase on 2026-06-16 (no prior ROADMAP.md existed); audited and updated 2026-06-23; audited 2026-09-22; audited 2026-09-23; audited 2026-09-24. Single-file Go app — see `clipport.go`, `AGENTS.md`/`CLAUDE.md` for architecture. Shipped history: [`docs/ledger/ROADMAP_SHIPPED.md`](docs/ledger/ROADMAP_SHIPPED.md).
+Inferred from the codebase on 2026-06-16 (no prior ROADMAP.md existed); audited and updated 2026-06-23; audited 2026-09-22; audited 2026-09-23; audited 2026-09-24; audited 2026-09-25. Single-file Go app — see `clipport.go`, `AGENTS.md`/`CLAUDE.md` for architecture. Shipped history: [`docs/ledger/ROADMAP_SHIPPED.md`](docs/ledger/ROADMAP_SHIPPED.md).
 
 ## Top 3 Suggested Tasks
 
-1. **`CLIPPORT_PASSWORD` env / `--password-file` for `-s`** — ~30 minutes
-   - `-s` reads the shared password from an interactive prompt, so scripted secure deployments either fall back to
-     plaintext or embed the password in launchd/systemd command lines. Reading it from an env var or file pairs with
-     the headless plaintext opt-in for unattended secure mode too. _(Promoted to Top 3.)_
-2. **Prune-pass cooldown on the accept loop** — ~20 minutes
-   - Follow-on to shipped prune-on-full: every rejected joiner triggers one stale-probe pass, so a flood of joiners at
-     capacity serializes probe writes under the global clipboard lock. A shared minimum interval between passes keeps
-     probe traffic bounded while preserving the slot-reclaim benefit. _(Promoted to Top 3.)_
-3. **`clipport key rotate` helper** — ~20 minutes
-   - `keygen` refuses to overwrite an existing key, so rotating today means manually removing `~/.clipport/key`; a
-     `clipport key rotate` subcommand would regenerate safely and remind the user to re-verify fingerprints with peers.
-     Follow-on from shipped own-key fingerprint work. _(Promoted to Top 3.)_
+1. **`clipport doctor` diagnostics** — ~1 hour
+   - First-run failures (missing clipboard backend, no key, firewall on the port) surface as opaque connect errors;
+     a `clipport doctor` subcommand would check backend availability, keypair/known-hosts state, and listener
+     reachability, pointing at the fix. _(Promoted to Top 3.)_
+2. **GIF/BMP/WebP image formats** — ~1-2 hours
+   - Image sync currently sniffs PNG/JPEG only; extend magic bytes, osascript class data (`GIFf`, `BMPf`), xclip/wl
+     MIME targets, and Windows fallbacks so animated GIFs and WebP screenshots propagate too. _(Promoted to Top 3.)_
+3. **Stale-prune count in `clipport status`** — ~20 minutes
+   - Wake pruning only logs at debug level; surface a closed-by-prune counter in the status snapshot so users can see
+     that slots were reclaimed. Follow-on from shipped server wake pruning, prune-on-full, and prune-pass cooldown.
+     _(Promoted to Top 3.)_
 
 ## New Suggestions (2026-07-02)
 
@@ -25,22 +24,30 @@ Inferred from the codebase on 2026-06-16 (no prior ROADMAP.md existed); audited 
 
 ## New Suggestions (2026-09-24)
 
-1. **GIF/BMP/WebP image formats** — ~1-2 hours
-   - Image sync currently sniffs PNG/JPEG only; extend magic bytes, osascript class data (`GIFf`, `BMPf`), xclip/wl MIME targets, and Windows fallbacks so animated GIFs and WebP screenshots propagate too.
-2. **`clipport status` shows last-synced payload kind** — ~30 minutes
+1. **`clipport status` shows last-synced payload kind** — ~30 minutes
    - `status` reports a timestamp only; add text vs image and byte size so users can confirm an image actually propagated without watching both terminals.
-3. **File-path clipboard sync** — ~half day
+2. **File-path clipboard sync** — ~half day
    - Copying a file in Finder/Explorer puts a path/URI on the clipboard, not bytes; sync the path text so the peer pastes a usable location (same-machine paths aside).
    - 🧑 needs-human: scope decision — what a cross-OS path should paste as (POSIX vs Windows path, or an error)
-4. **Stale-prune count in `clipport status`** — ~20 minutes
-   - Wake pruning only logs at debug level; surface a closed-by-prune counter in the status snapshot so users can see that slots were reclaimed. Follow-on from shipped server wake pruning.
-5. **`clipport doctor` diagnostics** — ~1 hour
-   - First-run failures (missing clipboard backend, no key, firewall on the port) surface as opaque connect errors;
-     a `clipport doctor` subcommand would check backend availability, keypair/known-hosts state, and listener
-     reachability, pointing at the fix.
-6. **Last-seen timestamp in `known-hosts list`** — ~30 minutes
+3. **Last-seen timestamp in `known-hosts list`** — ~30 minutes
    - After wake-prune work, users have no way to tell whether a trusted peer is still alive from the list alone;
      record and show a last-seen time per entry (updated on handshake).
+
+## New Suggestions (2026-09-25)
+
+1. **CI `goreleaser check`** — ~20 minutes
+   - `.goreleaser.yml` is only validated at tag push (`VALIDATE_GO_RELEASER` is disabled in `linter.yml` because
+     super-linter's goreleaser v2.2.0 rejects `formats`), so release-config breakage surfaces on release day instead
+     of on push; a pinned `goreleaser check` step in CI closes the documented gap.
+2. **`--version` flag** — ~15 minutes
+   - No way to print the running binary's version; wire goreleaser's standard `ldflags` (`.Version`) into a
+     `--version` flag so bug reports can state versions.
+3. **Headless service docs (launchd/systemd)** — ~45 minutes, docs-only
+   - The shipped `--quiet`/`--password-file`/`CLIPPORT_ALLOW_PLAINTEXT` trio targets launchd/systemd, but `README` has
+     no unit files to copy; add working launchd plist + systemd service examples using them.
+4. **State-dir migration helper** — ~45 minutes
+   - Moving to a new machine means hand-copying `~/.clipport` (key + `known_peers`) or redoing TOFU with every peer;
+     a documented `clipport` flow (or `clipport key export`/`import`) would move trust state safely.
 
 ## Remote Connectivity (Cross-Network)
 
@@ -124,3 +131,9 @@ Security constraint: remote mode must require `-k`; clear error message if attem
 - 2026-09-24 audit: shipped fuzz-failure artifact upload (Top 3 #1: `upload-artifact` step gated on `failure()` in the CI
   fuzz job, commit `252539c` — moved to ledger). Promoted `clipport key rotate` from suggestions. New Top 3: password
   env/file, prune-pass cooldown, key rotate — all agent-doable. No new suggestions (six still pending from today's batches).
+- 2026-09-25 audit: shipped all three Top 3 items from 2026-09-24 — `--password-file`/`CLIPPORT_SECRET` env pairing
+  (`1a81f27`), prune-pass cooldown (`ade0dba`), `clipport key rotate` (`f1c0627`) — all moved to ledger. New Top 3:
+  `clipport doctor`, GIF/BMP/WebP formats, stale-prune count — all agent-doable. Approved four new suggestions
+  (CI goreleaser check, `--version` flag, headless service docs, state-dir migration helper). Workflow note (not a
+  roadmap item): `just lintci` gained shfmt + actionlint (pinned v1.7.12) with the super-linter config resolved at
+  `.github/linters/actionlint.yml`, and all workflows now pin `ubuntu-26.04` runners.
