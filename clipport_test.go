@@ -682,8 +682,9 @@ func fakeClipboardPATH(t *testing.T) {
 		writeFakeBin(t, dir, "pbpaste")
 		writeFakeBin(t, dir, "pbcopy")
 	case "windows":
-		// LookPath on windows only checks presence, not content
-		for _, name := range []string{"powershell.exe", "clip"} {
+		// LookPath on windows only checks presence, not content; "clip"
+		// resolves through PATHEXT, so the stub must be clip.exe
+		for _, name := range []string{"powershell.exe", "clip.exe"} {
 			if err := os.WriteFile(filepath.Join(dir, name), nil, 0o755); err != nil {
 				t.Fatalf("write fake %s: %v", name, err)
 			}
