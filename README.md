@@ -28,7 +28,7 @@ Just enter what it says (`clipport 192.168.86.24:51607`) on your other device wi
 
 You can even have multiple devices joined to the same clipboard (just run that same command on the new device).
 
-Besides text, PNG and JPEG images copied on one device paste on the other (via `pbpaste`/`pbcopy`-adjacent tooling on macOS, `xclip`/`wl-paste` on Linux, and PowerShell on Windows). Other formats still propagate as text only when the OS exposes them that way, and never wipe a peer's clipboard when they do not.
+Besides text, PNG, JPEG, GIF and BMP images copied on one device paste on the other (via `pbpaste`/`pbcopy`-adjacent tooling on macOS, `xclip`/`wl-paste` on Linux, and PowerShell on Windows); WebP is accepted too and re-encoded for platforms that cannot store it natively. Other formats still propagate as text only when the OS exposes them that way, and never wipe a peer's clipboard when they do not.
 
 ```text
 Clipport - Universal Clipboard

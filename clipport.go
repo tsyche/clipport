@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/gob"
 	"encoding/hex"
 	"encoding/json"
@@ -17,6 +18,8 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"image/draw"
+	_ "image/gif" // registers the GIF decoder for image.Decode (fingerprints, shrink)
 	"image/jpeg"
 	"image/png"
 	"io"
@@ -25,6 +28,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
@@ -37,6 +41,10 @@ import (
 	"golang.org/x/term"
 
 	"golang.org/x/crypto/scrypt"
+
+	// register GIF/BMP/WebP decoders for image.Decode (fingerprints, shrink)
+	_ "golang.org/x/image/bmp"
+	"golang.org/x/image/webp"
 )
 
 var (
@@ -1938,20 +1946,26 @@ func normalizeWindowsClip(s string) string {
 var (
 	pngMagic  = []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}
 	jpegMagic = []byte{0xFF, 0xD8, 0xFF}
+	gifMagic  = []byte("GIF8")
+	riffMagic = []byte("RIFF")
+	webpMagic = []byte("WEBP")
 )
 
 // Image payload format tags (shared literals for goconst).
 const (
 	formatPNG  = "png"
 	formatJPEG = "jpeg"
+	formatGIF  = "gif"
+	formatBMP  = "bmp"
+	formatWebP = "webp"
 )
 
 // osDarwin is runtime.GOOS for macOS (constant for goconst).
 const osDarwin = "darwin"
 
-// isImagePayload reports whether s carries a PNG or JPEG blob rather than
-// text. Receiver-side sniffing keeps the wire format unchanged: frames are
-// still gob-encoded []byte, and only these magic prefixes route to the image
+// isImagePayload reports whether s carries an image blob rather than text.
+// Receiver-side sniffing keeps the wire format unchanged: frames are still
+// gob-encoded []byte, and only recognized magic prefixes route to the image
 // clipboard path.
 func isImagePayload(s string) bool {
 	return imagePayloadFormat(s) != ""
@@ -1959,26 +1973,63 @@ func isImagePayload(s string) bool {
 
 func imagePayloadFormat(s string) string {
 	b := []byte(s)
-	if len(b) >= len(pngMagic) && bytes.Equal(b[:len(pngMagic)], pngMagic) {
-		return "png"
-	}
-	if len(b) >= len(jpegMagic) && bytes.Equal(b[:len(jpegMagic)], jpegMagic) {
+	switch {
+	case len(b) >= len(pngMagic) && bytes.Equal(b[:len(pngMagic)], pngMagic):
+		return formatPNG
+	case len(b) >= len(jpegMagic) && bytes.Equal(b[:len(jpegMagic)], jpegMagic):
 		return formatJPEG
+	case isGIFMagic(b):
+		return formatGIF
+	case isBMPMagic(b):
+		return formatBMP
+	case isWebPMagic(b):
+		return formatWebP
 	}
 	return ""
+}
+
+// isGIFMagic matches GIF87a/GIF89a (they share the "GIF8" prefix).
+func isGIFMagic(b []byte) bool {
+	return len(b) >= 6 && bytes.HasPrefix(b, gifMagic) &&
+		(b[4] == '7' || b[4] == '9') && b[5] == 'a'
+}
+
+// isBMPMagic matches "BM" plus a plausible DIB header size at offset 14
+// (OS/2 core 12, BITMAPINFOHEADER 40, and the V4/V5 variants), so prose that
+// happens to start with "BM" is not misrouted to the image clipboard path.
+func isBMPMagic(b []byte) bool {
+	if len(b) < 26 || b[0] != 'B' || b[1] != 'M' {
+		return false
+	}
+	switch binary.LittleEndian.Uint32(b[14:18]) {
+	case 12, 40, 52, 56, 64, 108, 124:
+		return true
+	}
+	return false
+}
+
+// isWebPMagic matches RIFF container with WEBP fourcc at offset 8.
+func isWebPMagic(b []byte) bool {
+	return len(b) >= 12 && bytes.Equal(b[:4], riffMagic) && bytes.Equal(b[8:12], webpMagic)
 }
 
 // imageFingerprint hashes decoded pixels (re-encoded deterministically as
 // PNG) so a clipboard roundtrip that re-encodes the same picture still
 // compares equal — otherwise peers would echo images back and forth forever.
-// Undecodable payloads fall back to a raw-byte hash.
+// Decoded images are normalized to RGBA first: decoders return different
+// concrete types (Paletted for GIF, YCbCr for WebP, NRGBA for PNG) and
+// png.Encode would emit a different color type for each, breaking
+// cross-format equality for identical pixels. Undecodable payloads fall back
+// to a raw-byte hash.
 func imageFingerprint(s string) [32]byte {
 	img, _, err := image.Decode(strings.NewReader(s))
 	if err != nil {
 		return sha256.Sum256([]byte(s))
 	}
+	rgba := image.NewRGBA(img.Bounds())
+	draw.Draw(rgba, rgba.Bounds(), img, img.Bounds().Min, draw.Src)
 	var buf bytes.Buffer
-	if err := png.Encode(&buf, img); err != nil {
+	if err := png.Encode(&buf, rgba); err != nil {
 		return sha256.Sum256([]byte(s))
 	}
 	return sha256.Sum256(buf.Bytes())
@@ -2076,14 +2127,37 @@ func writeLocalImage(b []byte) error {
 	}
 }
 
+// darwinImageClass maps a payload format to the AppleScript clipboard class
+// and temp-file extension used by setDarwinImage. Unknown/absent formats fall
+// back to PNG (the class every other payload type degrades to). BMP writes
+// as BMPf (reads come back as darwinBMPClass — see darwinImageClasses).
+func darwinImageClass(format string) (class, ext string) {
+	switch format {
+	case formatJPEG:
+		return darwinJPEGClass, "jpg"
+	case formatGIF:
+		return darwinGIFClass, "gif"
+	case formatBMP:
+		return "BMPf", "bmp"
+	default:
+		return darwinPNGClass, "png"
+	}
+}
+
 // setDarwinImage writes the payload to a private temp file and points the
 // macOS clipboard at it — osascript data literals in argv hit ARG_MAX on
-// large screenshots, file-based `read` does not.
+// large screenshots, file-based `read` does not. WebP has no AppleScript
+// clipboard class, so it is re-encoded as PNG first (decoder registered via
+// the x/image/webp import).
 func setDarwinImage(b []byte) error {
-	class, ext := "PNGf", "png"
-	if imagePayloadFormat(string(b)) == formatJPEG {
-		class, ext = "JPEGf", "jpg"
+	if imagePayloadFormat(string(b)) == formatWebP {
+		converted, err := webpToPNG(b)
+		if err != nil {
+			return fmt.Errorf("decoding webp: %w", err)
+		}
+		b = converted
 	}
+	class, ext := darwinImageClass(imagePayloadFormat(string(b)))
 	f, err := os.CreateTemp("", "clipport-*."+ext)
 	if err != nil {
 		return err
@@ -2103,7 +2177,16 @@ func setDarwinImage(b []byte) error {
 
 // setWindowsImage receives the blob as base64 on stdin (argv would overflow
 // on large images) and installs it via System.Windows.Forms.Clipboard.
+// System.Drawing's codecs cover PNG/JPEG/GIF/BMP; WebP has no codec, so it
+// is re-encoded as PNG first.
 func setWindowsImage(b []byte) error {
+	if imagePayloadFormat(string(b)) == formatWebP {
+		converted, err := webpToPNG(b)
+		if err != nil {
+			return fmt.Errorf("decoding webp: %w", err)
+		}
+		b = converted
+	}
 	const script = `Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 $b64 = [Console]::In.ReadToEnd()
@@ -2119,13 +2202,27 @@ $img = [System.Drawing.Image]::FromStream($ms)
 	return nil
 }
 
+// linuxImageMIME maps a payload format to the X11/Wayland MIME type used to
+// offer the bytes to the pasteboard. Unknown formats fall back to PNG.
+func linuxImageMIME(format string) string {
+	switch format {
+	case formatJPEG:
+		return "image/jpeg"
+	case formatGIF:
+		return "image/gif"
+	case formatBMP:
+		return "image/bmp"
+	case formatWebP:
+		return "image/webp"
+	default:
+		return "image/png"
+	}
+}
+
 // setLinuxImage pipes the blob to xclip/X11 or wl-copy/Wayland with an
 // explicit image MIME type.
 func setLinuxImage(b []byte) error {
-	mime := "image/png"
-	if imagePayloadFormat(string(b)) == formatJPEG {
-		mime = "image/jpeg"
-	}
+	mime := linuxImageMIME(imagePayloadFormat(string(b)))
 	wayland := os.Getenv("WAYLAND_DISPLAY") != ""
 	type tool struct {
 		name string
@@ -2156,20 +2253,125 @@ func setLinuxImage(b []byte) error {
 	return lastErr
 }
 
-// readLocalImage returns PNG/JPEG clipboard bytes, or an error when the
-// clipboard holds no image the platform tools can read.
+// macOS pasteboard read/write class literals. «class BMP » is space-
+// padded; BMPf errors with -1700 on read.
+const (
+	darwinGIFClass  = "GIFf"
+	darwinBMPClass  = "BMP "
+	darwinPNGClass  = "PNGf"
+	darwinJPEGClass = "JPEGf"
+)
+
+// darwinImageClasses is the fallback probe order for macOS when `clipboard
+// info` is unavailable: original formats before PNG so an animated GIF is
+// not downgraded to a PNG conversion.
+var darwinImageClasses = []string{darwinGIFClass, darwinBMPClass, darwinPNGClass, darwinJPEGClass}
+
+// readLocalImage returns clipboard image bytes in any supported format
+// (PNG/JPEG/GIF/BMP/WebP), or an error when the clipboard holds no image
+// the platform tools can read. Every failure degrades to the error — never a
+// panic or a hang — so a missing tool or odd pasteboard just means "no image".
 func readLocalImage() ([]byte, error) {
 	switch runtime.GOOS {
 	case osDarwin:
-		if b, err := readOsascriptImage("PNGf"); err == nil {
-			return b, nil
-		}
-		return readOsascriptImage("JPEGf")
+		return readDarwinImage()
 	case "windows": //nolint // literal "windows" used elsewhere too
 		return readWindowsImage()
 	default:
 		return readLinuxImage()
 	}
+}
+
+var reClipboardImageType = regexp.MustCompile(`«class ([A-Za-z0-9 ]+)»|([A-Za-z]+) picture`)
+
+// readDarwinImage probes macOS pasteboard image classes. `clipboard info`
+// lists the raw type the writer put on the pasteboard FIRST, followed by
+// system-generated conversions (a PNG set also advertises a GIF
+// conversion), so probe in that listed order — otherwise a PNG/BMP gets
+// read back as some unrelated conversion of itself. If the listing fails
+// or parses to nothing recognizable, every class is probed in fixed
+// preference order instead.
+func readDarwinImage() ([]byte, error) {
+	classes := darwinImageClasses
+	if listed, listErr := darwinClipboardImageClasses(); listErr == nil && len(listed) > 0 {
+		classes = listed
+	}
+	for _, class := range classes {
+		if b, err := readOsascriptImage(class); err == nil && len(b) > 0 {
+			return b, nil
+		}
+	}
+	return nil, errors.New("no image clipboard content readable")
+}
+
+// darwinClipboardImageClasses returns the image read classes
+// `clipboard info` advertises for the current pasteboard, deduplicated and
+// in listed order (raw/source type first, then conversions). Both shapes
+// macOS prints are understood: `«class XXX»` fourccs and plain labels like
+// `GIF picture`. An error means the listing failed or showed no image
+// classes at all — callers then fall back to probing every class directly.
+func darwinClipboardImageClasses() ([]string, error) {
+	//nolint:gosec // G204: fixed osascript command, no interpolation
+	out, err := exec.Command("osascript", "-e", "clipboard info").Output()
+	if err != nil {
+		return nil, err
+	}
+	return parseClipboardInfoClasses(string(out))
+}
+
+// parseClipboardInfoClasses extracts image read classes from `clipboard
+// info` output, deduplicated and in listed order, e.g.
+//
+//	GIF picture, 42, «class PNGf», 173, «class BMP », 246, string, 27
+//
+// yields {"GIFf", "PNGf", "BMP "}.
+func parseClipboardInfoClasses(out string) ([]string, error) {
+	var classes []string
+	seen := map[string]bool{}
+	mark := func(name string) {
+		var slot string
+		switch strings.ToUpper(strings.TrimSpace(name)) {
+		case "GIFF", "GIF":
+			slot = darwinGIFClass
+		case "BMPF", "BMP":
+			slot = darwinBMPClass
+		case "PNGF", "PNG":
+			slot = darwinPNGClass
+		case "JPEGF", "JPEG":
+			slot = darwinJPEGClass
+		default:
+			return
+		}
+		if !seen[slot] {
+			seen[slot] = true
+			classes = append(classes, slot)
+		}
+	}
+	for _, m := range reClipboardImageType.FindAllStringSubmatch(out, -1) {
+		if m[1] != "" {
+			mark(m[1])
+		} else {
+			mark(m[2])
+		}
+	}
+	if len(classes) == 0 {
+		return nil, errors.New("no image classes in clipboard info")
+	}
+	return classes, nil
+}
+
+// webpToPNG re-encodes WebP as PNG: neither AppleScript clipboard classes
+// nor System.Drawing understand WebP, but both handle PNG.
+func webpToPNG(b []byte) ([]byte, error) {
+	img, err := webp.Decode(bytes.NewReader(b))
+	if err != nil {
+		return nil, err
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 func readOsascriptImage(class string) ([]byte, error) {
@@ -2211,10 +2413,20 @@ $c.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
 }
 
 // readLinuxImage tries image-capable clipboard tools (xclip on X11,
-// wl-paste on Wayland) for PNG, then JPEG. xsel has no image support.
+// wl-paste on Wayland) across the supported image MIME types. Original
+// formats come first so an animated GIF or raw WebP offered alongside a PNG
+// conversion is not downgraded; xsel has no image support. Each miss just
+// moves on to the next MIME/tool, so a missing tool or absent type degrades
+// to the final error, never a crash.
 func readLinuxImage() ([]byte, error) {
 	wayland := os.Getenv("WAYLAND_DISPLAY") != ""
-	mimes := []string{"image/png", "image/jpeg"}
+	mimes := []string{
+		linuxImageMIME(formatGIF),
+		linuxImageMIME(formatWebP),
+		linuxImageMIME(formatBMP),
+		linuxImageMIME(formatPNG),
+		linuxImageMIME(formatJPEG),
+	}
 	type candidate struct {
 		build func(mime string) *exec.Cmd
 		name  string

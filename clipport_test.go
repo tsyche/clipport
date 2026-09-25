@@ -5,15 +5,19 @@ import (
 	"bytes"
 	"crypto/ecdh"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/gob"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"image"
+	"image/color"
+	"image/gif"
 	"image/png"
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -1723,12 +1727,26 @@ func makeTestPNG(t *testing.T, r, g, b uint8) string {
 func TestIsImagePayload(t *testing.T) {
 	pngData := "\x89PNG\r\n\x1a\n" + "rest"
 	jpegData := "\xff\xd8\xff\xe0" + "rest"
+	bmpValid := func() string {
+		b := make([]byte, 30)
+		b[0], b[1] = 'B', 'M'
+		binary.LittleEndian.PutUint32(b[14:18], 40)
+		return string(b)
+	}()
 	cases := []struct {
 		name, in string
 		want     string
 	}{
 		{"png", pngData, "png"},
 		{"jpeg", jpegData, "jpeg"},
+		{"gif87", "GIF87a" + "rest", "gif"},
+		{"gif89", "GIF89a" + "rest", "gif"},
+		{"gif bad version", "GIF8xa" + "rest", ""},
+		{"bmp valid header", bmpValid, "bmp"},
+		{"bmp prose too short", "BM", ""},
+		{"bmp prose wrong header", "BMW cars are fast and blue!!", ""},
+		{"webp", "RIFF\x04\x00\x00\x00WEBPVP8 " + "rest", "webp"},
+		{"riff not webp", "RIFF\x04\x00\x00\x00WAVEfmt ", ""},
 		{"text", "hello world", ""},
 		{"empty", "", ""},
 		{"png-like text too short", "\x89PNG", ""},
@@ -1736,6 +1754,240 @@ func TestIsImagePayload(t *testing.T) {
 	for _, c := range cases {
 		if got := imagePayloadFormat(c.in); got != c.want {
 			t.Errorf("%s: format = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// makeTestGIF encodes a small paletted GIF for image-payload tests.
+func makeTestGIF(t *testing.T) string {
+	t.Helper()
+	pal := color.Palette{color.RGBA{10, 20, 30, 255}, color.RGBA{200, 10, 10, 255}}
+	img := image.NewPaletted(image.Rect(0, 0, 8, 8), pal)
+	for i := range img.Pix {
+		img.Pix[i] = byte(i % 2)
+	}
+	var buf bytes.Buffer
+	if err := gif.Encode(&buf, img, nil); err != nil {
+		t.Fatalf("encode fixture gif: %v", err)
+	}
+	return buf.String()
+}
+
+// testWebP1x1 is a known-valid 1×1 lossy WebP (base64).
+const testWebP1x1 = "UklGRhoAAABXRUJQVlA4TA0AAAAvAAAAEAcQERGIiP4HAA=="
+
+func TestImageFingerprintCrossFormatSamePixels(t *testing.T) {
+	gifData := makeTestGIF(t)
+	// Same pixels as PNG (decode the GIF, re-encode as PNG): fingerprints
+	// must match so a GIF→PNG clipboard conversion is not an echo.
+	img, _, err := image.Decode(strings.NewReader(gifData))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pngBuf bytes.Buffer
+	if err := png.Encode(&pngBuf, img); err != nil {
+		t.Fatal(err)
+	}
+	if imageFingerprint(gifData) != imageFingerprint(pngBuf.String()) {
+		t.Error("same pixels in GIF vs PNG fingerprint mismatch (echo risk)")
+	}
+	// Different pixels must not collide.
+	if imageFingerprint(gifData) == imageFingerprint(makeTestPNG(t, 200, 10, 10)) {
+		t.Error("different images fingerprint-collide")
+	}
+	// Undecodable payloads keep the raw-byte fallback (BMP-like junk etc).
+	junk := string([]byte{0x01, 0x02, 0x03, 0x04})
+	if imageFingerprint(junk) == imageFingerprint(junk+"x") {
+		t.Error("raw-byte fallback should distinguish payloads")
+	}
+}
+
+func TestShrinkImageToFitGIF(t *testing.T) {
+	// Small GIF: decode must be registered (x/image + image/gif imports) and
+	// the ladder returns JPEG for anything it can fit.
+	shrunk, err := shrinkImageToFit(makeTestGIF(t))
+	if err != nil {
+		t.Fatalf("shrink gif: %v", err)
+	}
+	if imagePayloadFormat(shrunk) != formatJPEG {
+		t.Errorf("shrunk format = %q, want jpeg", imagePayloadFormat(shrunk))
+	}
+}
+
+func TestWebpToPNG(t *testing.T) {
+	raw, err := base64.StdEncoding.DecodeString(testWebP1x1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pngBytes, err := webpToPNG(raw)
+	if err != nil {
+		t.Fatalf("webpToPNG: %v", err)
+	}
+	if imagePayloadFormat(string(pngBytes)) != formatPNG {
+		t.Errorf("converted format = %q, want png", imagePayloadFormat(string(pngBytes)))
+	}
+	if _, err := webpToPNG([]byte("not webp")); err == nil {
+		t.Error("expected error for non-webp input")
+	}
+}
+
+func TestDarwinImageClass(t *testing.T) {
+	cases := map[string][2]string{
+		formatPNG:  {"PNGf", "png"},
+		formatJPEG: {"JPEGf", "jpg"},
+		formatGIF:  {"GIFf", "gif"},
+		formatBMP:  {"BMPf", "bmp"},
+		formatWebP: {"PNGf", "png"}, // webp is converted before class selection
+		"":         {"PNGf", "png"},
+	}
+	for format, want := range cases {
+		class, ext := darwinImageClass(format)
+		if class != want[0] || ext != want[1] {
+			t.Errorf("darwinImageClass(%q) = %q/%q, want %q/%q", format, class, ext, want[0], want[1])
+		}
+	}
+}
+
+func TestLinuxImageMIME(t *testing.T) {
+	cases := map[string]string{
+		formatPNG:  "image/png",
+		formatJPEG: "image/jpeg",
+		formatGIF:  "image/gif",
+		formatBMP:  "image/bmp",
+		formatWebP: "image/webp",
+		"":         "image/png",
+	}
+	for format, want := range cases {
+		if got := linuxImageMIME(format); got != want {
+			t.Errorf("linuxImageMIME(%q) = %q, want %q", format, got, want)
+		}
+	}
+}
+
+func TestParseClipboardInfoClasses(t *testing.T) {
+	got, err := parseClipboardInfoClasses("{{«class GIFf», 64}, {«class PNGf», 4096}, {«class utxt», 300}}")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(got) != 2 || got[0] != "GIFf" || got[1] != "PNGf" {
+		t.Errorf("parsed = %q, want [GIFf PNGf]", got)
+	}
+	// Real shapes macOS prints: space-padded BMP fourcc, plain labels, and
+	// listed order preserved (raw type first, conversions after).
+	got, err = parseClipboardInfoClasses("GIF picture, 42, «class PNGf», 173, «class BMP », 246, JPEG picture, 775, string, 27")
+	if err != nil {
+		t.Fatalf("parse real shape: %v", err)
+	}
+	want := []string{"GIFf", "PNGf", "BMP ", "JPEGf"}
+	if len(got) != len(want) {
+		t.Fatalf("parsed = %q, want %q", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("parsed[%d] = %q, want %q (full: %q)", i, got[i], want[i], got)
+		}
+	}
+	if _, err := parseClipboardInfoClasses("{{«class utxt», 300}}"); err == nil {
+		t.Error("expected error when no image classes listed")
+	}
+	if _, err := parseClipboardInfoClasses("garbage"); err == nil {
+		t.Error("expected error for unparsable output")
+	}
+}
+
+// makeTestBMP builds a minimal valid 1×1 24-bit BMP (54-byte header + padded
+// pixel row) so BMP sniffing/decode/roundtrip tests have a real fixture.
+func makeTestBMP(t *testing.T) string {
+	t.Helper()
+	b := make([]byte, 58)
+	b[0], b[1] = 'B', 'M'
+	binary.LittleEndian.PutUint32(b[2:], uint32(len(b))) //nolint:gosec // G115: fixture size, tiny
+	binary.LittleEndian.PutUint32(b[10:], 54)
+	binary.LittleEndian.PutUint32(b[14:], 40)
+	binary.LittleEndian.PutUint32(b[18:], 1)
+	binary.LittleEndian.PutUint32(b[22:], 1)
+	binary.LittleEndian.PutUint16(b[26:], 1)
+	binary.LittleEndian.PutUint16(b[28:], 24)
+	b[54], b[55], b[56], b[57] = 10, 20, 30, 0
+	return string(b)
+}
+
+func TestBMPFixtureDecodes(t *testing.T) {
+	bmpData := makeTestBMP(t)
+	if imagePayloadFormat(bmpData) != formatBMP {
+		t.Fatalf("fixture format = %q, want bmp", imagePayloadFormat(bmpData))
+	}
+	if _, _, err := image.Decode(strings.NewReader(bmpData)); err != nil {
+		t.Errorf("fixture does not decode (x/image/bmp registered?): %v", err)
+	}
+	// Fingerprint works through the pixel path now that BMP decodes.
+	alt := makeTestBMP(t)
+	altBytes := []byte(alt)
+	altBytes[55] = 99 // different green channel → different pixels
+	if imageFingerprint(alt) == imageFingerprint(string(altBytes)) {
+		t.Error("BMP fingerprints should differ when pixel color changes")
+	}
+}
+
+// TestLiveDarwinImageRoundtrip exercises the REAL macOS pasteboard: set each
+// format through setDarwinImage, read it back through readDarwinImage, then
+// restore whatever was there before (the run's clipboard changes may sync to
+// a connected peer — this test is opt-in for that reason).
+// Run with: CLIPPORT_LIVE_CLIPBOARD=1 go test -run TestLiveDarwinImageRoundtrip
+func TestLiveDarwinImageRoundtrip(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("live pasteboard roundtrip is macOS-only")
+	}
+	if os.Getenv("CLIPPORT_LIVE_CLIPBOARD") == "" {
+		t.Skip("set CLIPPORT_LIVE_CLIPBOARD=1 to run against the real pasteboard")
+	}
+	preserveGlobals(t)
+
+	origText, pbErr := exec.Command("pbpaste").Output()
+	if pbErr != nil {
+		origText = nil
+	}
+	origImg, origImgErr := readLocalImage()
+	restore := func() {
+		if len(origText) > 0 {
+			runSetClipCommand(string(origText))
+		} else if origImgErr == nil {
+			if err := writeImageClip(origImg); err != nil {
+				t.Logf("restore original clipboard image: %v", err)
+			}
+		}
+	}
+	t.Cleanup(restore)
+
+	cases := []struct {
+		name    string
+		payload string
+		want    string
+	}{
+		{"gif", makeTestGIF(t), formatGIF},
+		{"bmp", makeTestBMP(t), formatBMP},
+		{"png", makeTestPNG(t, 10, 20, 30), formatPNG},
+		{"webp converts to png", func() string {
+			raw, err := base64.StdEncoding.DecodeString(testWebP1x1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return string(raw)
+		}(), formatPNG},
+	}
+	for _, c := range cases {
+		if err := setDarwinImage([]byte(c.payload)); err != nil {
+			t.Fatalf("%s: set: %v", c.name, err)
+		}
+		back, err := readDarwinImage()
+		if err != nil {
+			t.Fatalf("%s: read back: %v", c.name, err)
+		}
+		if got := imagePayloadFormat(string(back)); got != c.want {
+			t.Errorf("%s: roundtrip format = %q, want %q", c.name, got, c.want)
+		}
+		if c.want == formatGIF && string(back) != c.payload {
+			t.Errorf("gif roundtrip bytes differ (%d in, %d out)", len(c.payload), len(back))
 		}
 	}
 }

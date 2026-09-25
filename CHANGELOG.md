@@ -14,6 +14,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   server is running, and listener reachability (dial a running server on
   loopback, or test-bind the `-p` port / an ephemeral port). Exits 1 when any
   check fails.
+- GIF and BMP image sync alongside PNG and JPEG, plus WebP acceptance
+  (WebP is decoded and re-encoded to PNG first — no platform clipboard or
+  writer codec stores WebP natively). macOS reads the pasteboard in the
+  order `clipboard info` lists types (raw/source first, then conversions)
+  so an animated GIF is not downgraded to its PNG conversion, and uses
+  `«class BMP »` (space-padded fourcc) because `BMPf` errors with -1700;
+  Linux takes `--mime-type` from the sniffed format; Windows converts
+  WebP before System.Drawing writes. Fingerprints are normalized through
+  a pixel decode, so the same pixels in different formats do not echo
+  back to the sender. Missing decoders or tools degrade to "no image" —
+  never a crash.
 - `clipport key rotate`: regenerates this device's `-k` keypair safely —
   the old `key`/`key.pub` are renamed to timestamped `.bak` paths (or
   restored on failure), a fresh pair is generated, old and new
