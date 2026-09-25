@@ -165,7 +165,7 @@ Grab a binary from the [releases page](https://github.com/tsyche/clipport/releas
 
 1. Install [Termux](https://termux.dev) and the [Termux:API](https://play.google.com/store/apps/details?id=com.termux.api) app
 2. Run `pkg install termux-api` inside Termux
-3. Grab the `linux_arm64` binary from the [releases page](https://github.com/tsyche/clipport/releases) and move it to `$PREFIX/usr/bin/clipport`
+3. Grab the `clipport_Linux_arm64` archive from the [releases page](https://github.com/tsyche/clipport/releases) and move `clipport` out of it to `$PREFIX/usr/bin/clipport`
 
 ### Build from source
 
