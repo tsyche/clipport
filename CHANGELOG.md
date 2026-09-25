@@ -54,15 +54,18 @@ status` shows the limit as `Clients (n/max)`.
 - Prune on full: when a joiner arrives at a full server, one stale-probe
   pass runs before the rejection, so `--max-clients` slots held by
   write-dead peers free immediately and healthy joiners are rarely
-  rejected. Exactly one probe pass runs per rejected joiner.
+  rejected. Probe passes are rate-limited: one per 5s window no matter
+  how many joiners are rejected (a wake-triggered pass refreshes the
+  same window), so a flood of joiners cannot serialize probe writes
+  under the clipboard lock.
 - Server wake stale-slot pruning: after the server machine suspends and
   resumes, it probes every connected peer with an invisible empty frame
   and closes the write-dead ones, so their `--max-clients` slots free
   promptly instead of waiting out TCP keepalive (minutes) while a
   returning peer is rejected as "server full".
 - Local lint parity: `just lintci` runs the same golangci-lint,
-  prettier, markdownlint, and textlint versions super-linter pins in CI,
-  so lint failures are caught before push.
+  prettier, markdownlint, textlint, and shfmt versions super-linter pins
+  in CI, so lint failures are caught before push.
 - End-to-end loopback test: in-process `makeServer` ↔ `ConnectToServer`
   over a real loopback socket covers startup sync, change propagation,
   clean FIN shutdown, and the empty-server grace exit.

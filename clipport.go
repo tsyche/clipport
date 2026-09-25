@@ -159,6 +159,17 @@ Refer to https://github.com/tsyche/clipport for more information`
 	slotReleasePoll  = 25 * time.Millisecond
 	slotReleaseTries = 20
 
+	// prunePassCooldown is the minimum interval between joiner-triggered
+	// stale-probe passes on the accept loop: without it, every rejected
+	// joiner at capacity serializes probe writes under the clipboard lock.
+	// Wake-triggered passes always run and refresh the same window, so a
+	// joiner right after a wake skip is not probed twice either. Package var
+	// so tests can shorten it.
+	prunePassCooldown = 5 * time.Second
+	// lastPrunePass is the unix nanos of the most recent probe pass
+	// (0 = never); refreshed by runPrunePass before probing.
+	lastPrunePass atomic.Int64
+
 	// isClientProcess marks the dialing side. Clients never host peers, so
 	// they skip the receive-side re-broadcast in MonitorSentClips — a no-op
 	// across separate processes, but it keeps an in-process loopback test
@@ -880,14 +891,18 @@ func releaseClientSlot() {
 // — e.g. one that never came back after a previous wake — free their slots
 // instead of a healthy joiner being rejected. Slot release is async: closing
 // a dead conn unblocks HandleClient, whose cleanup calls releaseClientSlot a
-// moment later, so after pruning it polls briefly for a slot to open. At most
-// one prune pass runs per call, so a flood of joiners cannot turn this into
-// continuous probing on the accept loop.
+// moment later, so after pruning it polls briefly for a slot to open. Probe
+// passes are rate-limited by prunePassCooldown: a flood of rejected joiners
+// cannot turn the accept loop into continuous probing under the clipboard
+// lock (a joiner inside the cooldown window skips straight to the poll,
+// which also catches slot releases from the previous pass still in flight).
 func reserveClientSlotWithPrune() bool {
 	if tryReserveClientSlot() {
 		return true
 	}
-	pruneStale()
+	if prunePassDue() {
+		runPrunePass()
+	}
 	for i := 0; i < slotReleaseTries; i++ {
 		time.Sleep(slotReleasePoll)
 		if tryReserveClientSlot() {
@@ -895,6 +910,21 @@ func reserveClientSlotWithPrune() bool {
 		}
 	}
 	return false
+}
+
+// prunePassDue reports whether a joiner-triggered probe pass may run now:
+// none has run yet, or at least prunePassCooldown has elapsed since the
+// last pass (from either the accept loop or the wake watcher).
+func prunePassDue() bool {
+	last := lastPrunePass.Load()
+	return last == 0 || clockNow().UnixNano()-last >= int64(prunePassCooldown)
+}
+
+// runPrunePass records the pass timestamp before probing — so a concurrent
+// joiner sees the fresh window immediately — then runs one stale-probe pass.
+func runPrunePass() {
+	lastPrunePass.Store(clockNow().UnixNano())
+	pruneStale()
 }
 
 func makeServer(port string) {
@@ -1058,7 +1088,7 @@ func watchServerWake(stop <-chan struct{}) {
 		if now.Sub(last) >= wakeGapThreshold {
 			debug("server resume detected (poll gap", now.Sub(last), "); probing for stale clients")
 			time.Sleep(serverWakeSettle)
-			pruneStale()
+			runPrunePass()
 			last = clockNow()
 		} else {
 			last = now

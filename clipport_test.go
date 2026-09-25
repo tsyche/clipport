@@ -225,6 +225,9 @@ func preserveGlobals(t *testing.T) {
 	oldWakePoll, oldWakeSettle := serverWakePoll, serverWakeSettle
 	oldPruneStale := pruneStale
 	oldSlotTries := slotReleaseTries
+	oldPruneCooldown := prunePassCooldown
+	oldLastPrune := lastPrunePass.Load()
+	lastPrunePass.Store(0)
 	oldClientProc := isClientProcess.Load()
 	oversizeFrameReported.Store(false)
 	t.Cleanup(func() {
@@ -249,6 +252,8 @@ func preserveGlobals(t *testing.T) {
 		serverWakePoll, serverWakeSettle = oldWakePoll, oldWakeSettle
 		pruneStale = oldPruneStale
 		slotReleaseTries = oldSlotTries
+		prunePassCooldown = oldPruneCooldown
+		lastPrunePass.Store(oldLastPrune)
 		isClientProcess.Store(oldClientProc)
 	})
 }
@@ -547,6 +552,67 @@ func TestReserveClientSlotStillFullAfterPrune(t *testing.T) {
 	}
 	if pruned != 1 {
 		t.Errorf("prune ran %d times, want exactly 1", pruned)
+	}
+}
+
+// A flood of rejected joiners triggers one probe pass per cooldown window,
+// not one probe pass per joiner; once the window elapses the next joiner
+// probes again.
+func TestPrunePassCooldownOnAcceptLoop(t *testing.T) {
+	preserveGlobals(t)
+	slotReleaseTries = 1
+	pruned := 0
+	pruneStale = func() { pruned++ }
+	mu.Lock()
+	maxClients, activeConns = 1, 1
+	listOfClients = nil
+	mu.Unlock()
+	base := time.Now()
+	fake := base
+	clockNow = func() time.Time { return fake }
+
+	if reserveClientSlotWithPrune() {
+		t.Fatal("full server should reject the joiner")
+	}
+	if pruned != 1 {
+		t.Fatalf("first rejection: prune ran %d times, want 1", pruned)
+	}
+	if reserveClientSlotWithPrune() {
+		t.Fatal("full server should reject the second joiner too")
+	}
+	if pruned != 1 {
+		t.Errorf("joiner inside cooldown: prune ran %d times, want 1 (probe pass skipped)", pruned)
+	}
+	fake = base.Add(prunePassCooldown + time.Second)
+	if reserveClientSlotWithPrune() {
+		t.Fatal("full server should reject the third joiner too")
+	}
+	if pruned != 2 {
+		t.Errorf("joiner after cooldown: prune ran %d times, want 2", pruned)
+	}
+}
+
+// A wake-triggered probe pass refreshes the same cooldown window, so a
+// joiner arriving right after a wake is not probed a second time.
+func TestPrunePassCooldownSharedWithWake(t *testing.T) {
+	preserveGlobals(t)
+	slotReleaseTries = 1
+	pruned := 0
+	pruneStale = func() { pruned++ }
+	mu.Lock()
+	maxClients, activeConns = 1, 1
+	listOfClients = nil
+	mu.Unlock()
+
+	runPrunePass() // what the wake watcher runs after resume
+	if pruned != 1 {
+		t.Fatalf("wake pass: prune ran %d times, want 1", pruned)
+	}
+	if reserveClientSlotWithPrune() {
+		t.Fatal("full server should reject the joiner")
+	}
+	if pruned != 1 {
+		t.Errorf("joiner right after wake pass: prune ran %d times, want 1 (shared window)", pruned)
 	}
 }
 
