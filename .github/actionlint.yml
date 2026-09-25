@@ -1,6 +1,8 @@
-# Config for actionlint. Super-linter passes this file explicitly
-# (GITHUB_ACTIONS_CONFIG_FILE defaults to actionlint.yml at the repo root);
-# local `just lintci` passes it via -config-file.
+# Config for actionlint. Super-linter resolves it as
+# ${GITHUB_WORKSPACE}/${LINTER_RULES_PATH}/actionlint.yml with LINTER_RULES_PATH
+# defaulting to .github — hence this file lives here, not at the repo root.
+# Local `just lintci` passes the same path via -config-file (bare `actionlint`
+# also auto-discovers .github/actionlint.yml).
 #
 # The pinned super-linter's actionlint ships a stale runner-label list that
 # predates ubuntu-26.04, so the label check needs the extra entry — declare it
