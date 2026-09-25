@@ -218,6 +218,8 @@ func preserveGlobals(t *testing.T) {
 	oldStateDir := stateDir
 	oldQuiet, oldDebug := quiet, printDebugInfo
 	oldClipPush := lastClipPush.Load()
+	oldClipKind := lastClipKindString()
+	oldClipBytes := lastClipBytes.Load()
 	oldMaxClients, oldActive := maxClients, activeConns
 	oldDebounce := clipboardDebounce
 	oldWakeGap := wakeGapThreshold
@@ -247,6 +249,8 @@ func preserveGlobals(t *testing.T) {
 		stateDir = oldStateDir
 		quiet, printDebugInfo = oldQuiet, oldDebug
 		lastClipPush.Store(oldClipPush)
+		lastClipKind.Store(oldClipKind)
+		lastClipBytes.Store(oldClipBytes)
 		maxClients, activeConns = oldMaxClients, oldActive
 		clipboardDebounce = oldDebounce
 		wakeGapThreshold = oldWakeGap
@@ -445,6 +449,8 @@ func TestCurrentStatusSnapshot(t *testing.T) {
 	maxClients = 8
 	mu.Unlock()
 	lastClipPush.Store(1234567890)
+	lastClipKind.Store(clipKindImage)
+	lastClipBytes.Store(4321)
 	prunedClients.Store(5)
 
 	st := currentStatus("53701")
@@ -463,6 +469,9 @@ func TestCurrentStatusSnapshot(t *testing.T) {
 	}
 	if st.LastClipPush != 1234567890 {
 		t.Errorf("lastClipPush = %d", st.LastClipPush)
+	}
+	if st.LastClipKind != clipKindImage || st.LastClipBytes != 4321 {
+		t.Errorf("payload = %q/%d, want image/4321", st.LastClipKind, st.LastClipBytes)
 	}
 	if st.Pruned != 5 {
 		t.Errorf("pruned = %d, want 5", st.Pruned)
@@ -646,6 +655,8 @@ func TestServeStatusRoundtrip(t *testing.T) {
 	listOfClients = []*client{{addr: "1.2.3.4:9"}}
 	mu.Unlock()
 	lastClipPush.Store(42)
+	lastClipKind.Store(clipKindText)
+	lastClipBytes.Store(17)
 	prunedClients.Store(9)
 
 	go serveStatus(l, "7777")
@@ -662,7 +673,7 @@ func TestServeStatusRoundtrip(t *testing.T) {
 	if err := json.Unmarshal(line, &st); err != nil {
 		t.Fatalf("unmarshal %q: %v", line, err)
 	}
-	if st.Port != "7777" || len(st.Clients) != 1 || st.Clients[0] != "1.2.3.4:9" || st.LastClipPush != 42 || st.Pruned != 9 {
+	if st.Port != "7777" || len(st.Clients) != 1 || st.Clients[0] != "1.2.3.4:9" || st.LastClipPush != 42 || st.LastClipKind != clipKindText || st.LastClipBytes != 17 || st.Pruned != 9 {
 		t.Errorf("snapshot = %+v", st)
 	}
 }
@@ -712,6 +723,53 @@ func TestRunStatusPruneLine(t *testing.T) {
 	out = captureStdout(t, runStatus)
 	if strings.Contains(out, "pruned") {
 		t.Errorf("prune line should be hidden at zero: %q", out)
+	}
+}
+
+// The last-pushed line carries payload kind + human size; a status server
+// that predates payload-kind reporting (empty kind) keeps the plain line.
+func TestRunStatusPayloadLine(t *testing.T) {
+	preserveGlobals(t)
+	dir := t.TempDir()
+	stateDir = dir
+	l, err := net.Listen("unix", statusSocketPath(dir))
+	if err != nil {
+		t.Skipf("unix sockets unavailable: %v", err)
+	}
+	defer l.Close()
+	go serveStatus(l, "7777")
+
+	lastClipPush.Store(time.Now().UnixNano())
+	lastClipKind.Store(clipKindImage)
+	lastClipBytes.Store(2048)
+	out := captureStdout(t, runStatus)
+	if !strings.Contains(out, "Clipboard last pushed:") || !strings.Contains(out, "(image, 2.0 KiB)") {
+		t.Errorf("payload line missing kind/size: %q", out)
+	}
+
+	lastClipKind.Store("") // older server: kind field absent
+	out = captureStdout(t, runStatus)
+	if !strings.Contains(out, "Clipboard last pushed:") || strings.Contains(out, "(image") {
+		t.Errorf("plain pushed line expected for empty kind: %q", out)
+	}
+}
+
+func TestFormatByteSize(t *testing.T) {
+	cases := []struct {
+		n    int64
+		want string
+	}{
+		{0, "0 B"},
+		{1023, "1023 B"},
+		{1024, "1.0 KiB"},
+		{1536, "1.5 KiB"},
+		{1048576, "1.0 MiB"},
+		{3 << 30, "3.0 GiB"},
+	}
+	for _, c := range cases {
+		if got := formatByteSize(c.n); got != c.want {
+			t.Errorf("formatByteSize(%d) = %q, want %q", c.n, got, c.want)
+		}
 	}
 }
 
@@ -1406,6 +1464,12 @@ func TestMonitorLocalClipSendsAndStops(t *testing.T) {
 	}
 	if string(payload) != "hello-from-local" {
 		t.Errorf("sent %q, want %q", payload, "hello-from-local")
+	}
+	if got := lastClipKindString(); got != clipKindText {
+		t.Errorf("lastClipKind = %q, want %q", got, clipKindText)
+	}
+	if got := lastClipBytes.Load(); got != int64(len("hello-from-local")) {
+		t.Errorf("lastClipBytes = %d, want %d", got, len("hello-from-local"))
 	}
 }
 
@@ -2123,6 +2187,12 @@ func TestMonitorLocalClipSendsImagePayload(t *testing.T) {
 	}
 	if string(payload) != pngData {
 		t.Error("image payload not sent verbatim")
+	}
+	if got := lastClipKindString(); got != clipKindImage {
+		t.Errorf("lastClipKind = %q, want %q after image push", got, clipKindImage)
+	}
+	if got := lastClipBytes.Load(); got != int64(len(pngData)) {
+		t.Errorf("lastClipBytes = %d, want %d", got, len(pngData))
 	}
 }
 

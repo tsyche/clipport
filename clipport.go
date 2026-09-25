@@ -832,8 +832,45 @@ func fingerprint(pubKey []byte) string {
 }
 
 // lastClipPush records when MonitorLocalClip last pushed a non-empty clipboard
-// frame to a peer (unix nanos; 0 = never). Reported by `clipport status`.
+// frame to a peer (unix nanos; 0 = never). lastClipKind/lastClipBytes
+// describe that payload. Reported by `clipport status`.
 var lastClipPush atomic.Int64
+
+// clipKindText/clipKindImage are the lastClipKind payload-kind values.
+const (
+	clipKindText  = "text"
+	clipKindImage = "image"
+)
+
+// lastClipKind is the kind of the frame recorded by lastClipPush (a string,
+// "" when never pushed — including when talking to a status server old
+// enough not to report one); lastClipBytes is its payload length.
+var (
+	lastClipKind  atomic.Value
+	lastClipBytes atomic.Int64
+)
+
+// lastClipKindString reads lastClipKind safely: atomic.Value stores are
+// nil-typed until first use, and only strings are ever stored.
+func lastClipKindString() string {
+	if s, ok := lastClipKind.Load().(string); ok {
+		return s
+	}
+	return ""
+}
+
+// recordClipPush stamps the payload metadata `clipport status` reports for
+// a successfully pushed frame: kind (image vs text, by magic sniff) and
+// byte length, alongside the push timestamp.
+func recordClipPush(payload string) {
+	lastClipPush.Store(time.Now().UnixNano())
+	kind := clipKindText
+	if imagePayloadFormat(payload) != "" {
+		kind = clipKindImage
+	}
+	lastClipKind.Store(kind)
+	lastClipBytes.Store(int64(len(payload)))
+}
 
 // prunedClients counts write-dead peers closed by stale-probe pruning since
 // server start (every count = a slot reclaimed ahead of TCP keepalive).
@@ -845,12 +882,14 @@ var prunedClients atomic.Int64
 // the cumulative count of write-dead peers closed by stale-probe pruning
 // since server start — every one freed a slot ahead of TCP keepalive.
 type statusSnapshot struct {
-	Pid          int      `json:"pid"`
-	Port         string   `json:"port"`
-	Clients      []string `json:"clients"`
-	MaxClients   int      `json:"max_clients"`    // 0 = unlimited
-	LastClipPush int64    `json:"last_clip_push"` // unix nanos; 0 = never
-	Pruned       int64    `json:"pruned"`         // cumulative; 0 = never
+	Pid           int      `json:"pid"`
+	Port          string   `json:"port"`
+	Clients       []string `json:"clients"`
+	MaxClients    int      `json:"max_clients"`    // 0 = unlimited
+	LastClipPush  int64    `json:"last_clip_push"` // unix nanos; 0 = never
+	LastClipKind  string   `json:"last_clip_kind"` // "text"/"image"; "" on older servers
+	LastClipBytes int64    `json:"last_clip_bytes"`
+	Pruned        int64    `json:"pruned"` // cumulative; 0 = never
 }
 
 func statusSocketPath(dir string) string {
@@ -870,12 +909,14 @@ func currentStatus(port string) statusSnapshot {
 	max := maxClients
 	mu.Unlock()
 	return statusSnapshot{
-		Pid:          os.Getpid(),
-		Port:         port,
-		Clients:      clients,
-		MaxClients:   max,
-		LastClipPush: lastClipPush.Load(),
-		Pruned:       prunedClients.Load(),
+		Pid:           os.Getpid(),
+		Port:          port,
+		Clients:       clients,
+		MaxClients:    max,
+		LastClipPush:  lastClipPush.Load(),
+		LastClipKind:  lastClipKindString(),
+		LastClipBytes: lastClipBytes.Load(),
+		Pruned:        prunedClients.Load(),
 	}
 }
 
@@ -936,8 +977,9 @@ func queryStatus(dir string) (statusSnapshot, error) {
 
 // runStatus implements `clipport status`: report the running server's pid,
 // port, connected clients, stale-prune count (when non-zero), and last
-// clipboard push. Always prints (direct subcommand output, not gated by
-// --quiet); exits 1 when no server answers.
+// clipboard push with its payload kind and size (when reported). Always
+// prints (direct subcommand output, not gated by --quiet); exits 1 when no
+// server answers.
 func runStatus() {
 	dir, err := clipportDir()
 	if err != nil {
@@ -968,8 +1010,28 @@ func runStatus() {
 		fmt.Println("Clipboard last pushed: never")
 	} else {
 		ago := time.Since(time.Unix(0, st.LastClipPush)).Round(time.Second)
-		fmt.Printf("Clipboard last pushed: %s ago\n", ago)
+		if st.LastClipKind == clipKindText || st.LastClipKind == clipKindImage {
+			fmt.Printf("Clipboard last pushed: %s ago (%s, %s)\n", ago, st.LastClipKind, formatByteSize(st.LastClipBytes))
+		} else {
+			// Older status server that predates payload-kind reporting.
+			fmt.Printf("Clipboard last pushed: %s ago\n", ago)
+		}
 	}
+}
+
+// formatByteSize renders a payload length for humans: 123 B, 41.0 KiB,
+// 3.2 MiB (1024-based units).
+func formatByteSize(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for m := n / unit; m >= unit; m /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGT"[exp])
 }
 
 // doctorCheck is one diagnostic result `clipport doctor` reports. status is
@@ -1581,7 +1643,7 @@ func monitorLocalClip(w *bufio.Writer, key []byte, stop <-chan struct{}, checkWa
 		var sendErr error
 		if cur != "" {
 			if sendErr = sendFrame(w, cur, key); sendErr == nil {
-				lastClipPush.Store(time.Now().UnixNano())
+				recordClipPush(cur)
 			}
 		}
 		mu.Unlock()

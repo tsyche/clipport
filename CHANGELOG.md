@@ -29,6 +29,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   of write-dead peers closed by the stale-probe passes (wake resume,
   full-server joiners), each of which reclaimed a slot ahead of TCP
   keepalive. Printed only when non-zero.
+- `clipport status` shows the last-pushed payload's kind and size
+  (`Clipboard last pushed: 9s ago (image, 41.0 KiB)`), so an image
+  propagation can be confirmed without watching both terminals. A status
+  server that predates the fields keeps the plain timestamp line.
 - `clipport key rotate`: regenerates this device's `-k` keypair safely —
   the old `key`/`key.pub` are renamed to timestamped `.bak` paths (or
   restored on failure), a fresh pair is generated, old and new
