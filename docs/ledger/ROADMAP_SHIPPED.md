@@ -38,8 +38,79 @@
 - [x] 2026-09-25 — `--password-file` for `-s` secure mode (+ `CLIPPORT_SECRET` env path)
 - [x] 2026-09-25 — Prune-pass cooldown on the accept loop (one probe pass per 5s)
 - [x] 2026-09-25 — `clipport key rotate` subcommand (backup + regenerate)
+- [x] 2026-09-25 — `clipport doctor` diagnostics subcommand
+- [x] 2026-09-25 — GIF/BMP/WebP image format sync (WebP re-encoded to PNG)
+- [x] 2026-09-25 — Stale-prune count in `clipport status`
 
 ## Archived entries
+
+### 2026-09-25 — Stale-prune count in `clipport status`
+
+1. **Stale-prune count in `clipport status`** — ~20 minutes
+   - Wake pruning only logs at debug level; surface a closed-by-prune counter in the status snapshot so users can see
+     that slots were reclaimed. Follow-on from shipped server wake pruning, prune-on-full, and prune-pass cooldown.
+     _(Promoted to Top 3.)_
+
+Shipped: `prunedClients atomic.Int64` — incremented in
+`pruneStaleClients` only when `conn.Close()` returns nil (a repeat
+pass before `HandleClient` cleanup unlists the conn cannot
+double-count, mirroring `net.Conn`'s error-on-second-close);
+`statusSnapshot.Pruned` (`pruned` JSON field) flows through
+`currentStatus`/`serveStatus`, and `runStatus` prints
+`Stale clients pruned: N` only when N > 0 (older servers without
+the field simply omit the line). Fake probe conns now error on
+repeat close so tests match real net.Conn semantics. Help/README/
+CHANGELOG updated. Tests: `TestCurrentStatusSnapshot`,
+`TestServeStatusRoundtrip`, `TestRunStatusPruneLine`, prune-pass
+tests extended. Commit: `2dadda2`; Test + Lint + CodeQL + Docs
+green in CI.
+
+### 2026-09-25 — GIF/BMP/WebP image format sync
+
+1. **GIF/BMP/WebP image formats** — ~1-2 hours
+   - Image sync currently sniffs PNG/JPEG only; extend magic bytes, osascript class data (`GIFf`, `BMPf`), xclip/wl
+     MIME targets, and Windows fallbacks so animated GIFs and WebP screenshots propagate too. _(Promoted to Top 3.)_
+
+Shipped: magic sniffing (`gifMagic`, `riffMagic`/`webpMagic`,
+BMP DIB-header check) in `imagePayloadFormat`; write paths per
+platform — darwin `darwinImageClass` (`GIFf`/`BMPf`/`PNGf`/
+`JPEGf`), `linuxImageMIME` for `--mime-type`, Windows converts
+WebP→PNG before System.Drawing. WebP decoded via pinned
+`golang.org/x/image v0.30.0` (last go1.23-compatible version) +
+`x/image/bmp`, both registered via blank imports; `webpToPNG`
+re-encodes for platforms with no WebP codec. macOS reads types
+in `clipboard info` LISTED order (raw/source first, then
+conversions — a fixed preference order read GIF conversions of
+PNGs) using `«class BMP »` (BMPf errors -1700 on read) with
+label parsing (`GIF picture`/`JPEG picture`) and direct-probe
+fallback; `imageFingerprint` normalizes through decode→RGBA→PNG
+so cross-format echoes are prevented; `readLinuxImage` probes
+gif/webp/bmp/png/JPEG order. Live opt-in test
+`TestLiveDarwinImageRoundtrip` (`CLIPPORT_LIVE_CLIPBOARD=1`)
+verifies gif/bmp/png/webp roundtrip + clipboard restore on macOS.
+README/AGENTS/CLAUDE/CHANGELOG updated. Commit: `ed7b4d7`;
+Test + Lint + CodeQL + Docs green in CI.
+
+### 2026-09-25 — `clipport doctor` diagnostics subcommand
+
+1. **`clipport doctor` diagnostics** — ~1 hour
+   - First-run failures (missing clipboard backend, no key, firewall on the port) surface as opaque connect errors;
+     a `clipport doctor` subcommand would check backend availability, keypair/known-hosts state, and listener
+     reachability, pointing at the fix. _(Promoted to Top 3.)_
+
+Shipped: `clipport doctor` → `runDoctor(port)` dispatches after
+`status` in `main`; `collectDoctorChecks` builds the battery —
+clipboard backend on PATH (`requireOnPATH` + `clipboardBackendDetail`
+with Wayland/X11/macOS/Windows detail), state dir, `doctorKeypairCheck`
+(keypair presence + fingerprint), trusted `known-hosts` count,
+running-server check, and `doctorListenerCheck` (dial a running
+server on loopback, else test-bind the `-p` port / an ephemeral
+port). `doctorOK`/`doctorFail` statuses; exits 1 when any check
+fails. Help + `README` usage blocks + CHANGELOG updated; Windows
+test stubs corrected (`LookPath("clip")` resolves via PATHEXT →
+`powershell.exe`/`clip.exe`). Tests: `TestClipboardBackendDetailMissingTools/ReportsTool`,
+`TestCollectDoctorChecksNoServerAllOK/KeyPairPresent/ListenerBusy/RunningServer`.
+Commits: `eef6f82` + `55904b4`; Test + Lint + CodeQL green in CI.
 
 ### 2026-09-25 — `clipport key rotate` subcommand
 

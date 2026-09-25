@@ -4,17 +4,16 @@ Inferred from the codebase on 2026-06-16 (no prior ROADMAP.md existed); audited 
 
 ## Top 3 Suggested Tasks
 
-1. **`clipport doctor` diagnostics** — ~1 hour
-   - First-run failures (missing clipboard backend, no key, firewall on the port) surface as opaque connect errors;
-     a `clipport doctor` subcommand would check backend availability, keypair/known-hosts state, and listener
-     reachability, pointing at the fix. _(Promoted to Top 3.)_
-2. **GIF/BMP/WebP image formats** — ~1-2 hours
-   - Image sync currently sniffs PNG/JPEG only; extend magic bytes, osascript class data (`GIFf`, `BMPf`), xclip/wl
-     MIME targets, and Windows fallbacks so animated GIFs and WebP screenshots propagate too. _(Promoted to Top 3.)_
-3. **Stale-prune count in `clipport status`** — ~20 minutes
-   - Wake pruning only logs at debug level; surface a closed-by-prune counter in the status snapshot so users can see
-     that slots were reclaimed. Follow-on from shipped server wake pruning, prune-on-full, and prune-pass cooldown.
-     _(Promoted to Top 3.)_
+1. **CI `goreleaser check`** — ~20 minutes
+   - `.goreleaser.yml` is only validated at tag push (`VALIDATE_GO_RELEASER` is disabled in `linter.yml` because
+     super-linter's goreleaser v2.2.0 rejects `formats`), so release-config breakage surfaces on release day instead
+     of on push; a pinned `goreleaser check` step in CI closes the documented gap. _(Promoted to Top 3.)_
+2. **`clipport status` shows last-synced payload kind** — ~30 minutes
+   - `status` reports a timestamp only; add text vs image and byte size so users can confirm an image actually
+     propagated without watching both terminals. _(Promoted to Top 3.)_
+3. **Last-seen timestamp in `known-hosts list`** — ~30 minutes
+   - After wake-prune work, users have no way to tell whether a trusted peer is still alive from the list alone;
+     record and show a last-seen time per entry (updated on handshake). _(Promoted to Top 3.)_
 
 ## New Suggestions (2026-07-02)
 
@@ -24,30 +23,27 @@ Inferred from the codebase on 2026-06-16 (no prior ROADMAP.md existed); audited 
 
 ## New Suggestions (2026-09-24)
 
-1. **`clipport status` shows last-synced payload kind** — ~30 minutes
-   - `status` reports a timestamp only; add text vs image and byte size so users can confirm an image actually propagated without watching both terminals.
-2. **File-path clipboard sync** — ~half day
+1. **File-path clipboard sync** — ~half day
    - Copying a file in Finder/Explorer puts a path/URI on the clipboard, not bytes; sync the path text so the peer pastes a usable location (same-machine paths aside).
    - 🧑 needs-human: scope decision — what a cross-OS path should paste as (POSIX vs Windows path, or an error)
-3. **Last-seen timestamp in `known-hosts list`** — ~30 minutes
-   - After wake-prune work, users have no way to tell whether a trusted peer is still alive from the list alone;
-     record and show a last-seen time per entry (updated on handshake).
 
 ## New Suggestions (2026-09-25)
 
-1. **CI `goreleaser check`** — ~20 minutes
-   - `.goreleaser.yml` is only validated at tag push (`VALIDATE_GO_RELEASER` is disabled in `linter.yml` because
-     super-linter's goreleaser v2.2.0 rejects `formats`), so release-config breakage surfaces on release day instead
-     of on push; a pinned `goreleaser check` step in CI closes the documented gap.
-2. **`--version` flag** — ~15 minutes
-   - No way to print the running binary's version; wire goreleaser's standard `ldflags` (`.Version`) into a
-     `--version` flag so bug reports can state versions.
-3. **Headless service docs (launchd/systemd)** — ~45 minutes, docs-only
+1. **Headless service docs (launchd/systemd)** — ~45 minutes, docs-only
    - The shipped `--quiet`/`--password-file`/`CLIPPORT_ALLOW_PLAINTEXT` trio targets launchd/systemd, but `README` has
      no unit files to copy; add working launchd plist + systemd service examples using them.
-4. **State-dir migration helper** — ~45 minutes
+2. **State-dir migration helper** — ~45 minutes
    - Moving to a new machine means hand-copying `~/.clipport` (key + `known_peers`) or redoing TOFU with every peer;
      a documented `clipport` flow (or `clipport key export`/`import`) would move trust state safely.
+3. **`--json` output for status/doctor** — ~40 minutes
+   - Both subcommands print human-oriented lines only; a `--json` mode would let launchd/systemd health checks and
+     scripts parse pid/clients/prune counts and doctor results instead of scraping text.
+4. **Dependabot for Go modules + Actions** — ~15 minutes
+   - No automated dependency-update PRs; a minimal `.github/dependabot.yml` (gomod + `github-actions` ecosystems, weekly)
+     keeps `x/image`/`x/sys` and action pins current without manual bumps.
+5. **Extend loopback end-to-end test to image payloads** — ~45 minutes
+   - `TestEndToEndLoopback` proves text sync over a real socket but never sends an image; stage a PNG (and GIF) through
+     `getLocalClip`/`applied` to prove image frames cross the wire and land through `setLocalClip` end-to-end.
 
 ## Remote Connectivity (Cross-Network)
 
@@ -86,7 +82,7 @@ Security constraint: remote mode must require `-k`; clear error message if attem
 - **AUR package (Arch/Manjaro)** — goreleaser v2 has native `aurs` support; requires an AUR account, an SSH keypair, and the private key added as a GitHub Actions secret (`AUR_SSH_PRIVATE_KEY`). ~30 min once prerequisites are in place. 🧑 needs-human: AUR account + SSH key registration
 - **Scoop bucket (Windows)** — goreleaser has native `scoops` support; create a `scoop-bucket` repository under `tsyche`, wire it up in `.goreleaser.yml` similarly to the Homebrew tap. ~20 min. 🧑 needs-human: create GitHub repository under account
 - **Transport security for non-encrypted mode** — cleartext mode still has no authentication between peers; anyone who can reach the port can join the clipboard. The plaintext confirmation gate at least makes this an explicit, opt-in choice rather than a silent default — but the underlying gap (no auth) is unchanged.
-- **`flake.nix` `vendorSha256` staleness check** — unverified against current `go.mod`/`go.sum` since the rebrand; likely fine but not confirmed.
+- **`flake.nix` `vendorSha256` staleness check** — unverified against current `go.mod`/`go.sum` since the rebrand, and `go.mod` changed again on 2026-09-25 (`golang.org/x/image` added), so the hash is almost certainly stale until `nix build` re-fetches it (no `nix` binary on the dev machine to recompute).
 
 ## Notes
 
@@ -137,3 +133,8 @@ Security constraint: remote mode must require `-k`; clear error message if attem
   (CI goreleaser check, `--version` flag, headless service docs, state-dir migration helper). Workflow note (not a
   roadmap item): `just lintci` gained shfmt + actionlint (pinned v1.7.12) with the super-linter config resolved at
   `.github/linters/actionlint.yml`, and all workflows now pin `ubuntu-26.04` runners.
+- 2026-09-25 audit: shipped all three Top 3 items — `clipport doctor` (`eef6f82`, Windows test fix `55904b4`),
+  GIF/BMP/WebP image sync (`ed7b4d7`, macOS reads in `clipboard info` listed order + live roundtrip test),
+  stale-prune count in status (`2dadda2`) — all moved to ledger. New Top 3: CI goreleaser check, status payload
+  kind, known-hosts last-seen — all agent-doable. Removed the stale `--version` suggestion (flag + goreleaser
+  ldflags already shipped). Approved three new suggestions (`--json` output, Dependabot, end-to-end image payloads).
