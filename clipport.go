@@ -73,7 +73,7 @@ Examples:
      clipport -k 192.168.86.24:53701            # join using keypair-based encryption instead of a password
     clipport known-hosts                       # list trusted -k peers
     clipport known-hosts remove 192.168.86.24  # forget a peer (after key rotation; peer IDs are host-only)
-    clipport status                           # list connected clients of the running server
+    clipport status                           # list connected clients and stale-prune count
     clipport doctor                           # diagnose clipboard backend, keys, state, and listener
 Running just ` + "`clipport`" + ` will start a new clipboard.
 It will also provide an address with which you can connect to the same clipboard with another device.
@@ -835,14 +835,22 @@ func fingerprint(pubKey []byte) string {
 // frame to a peer (unix nanos; 0 = never). Reported by `clipport status`.
 var lastClipPush atomic.Int64
 
+// prunedClients counts write-dead peers closed by stale-probe pruning since
+// server start (every count = a slot reclaimed ahead of TCP keepalive).
+// Reported by `clipport status`.
+var prunedClients atomic.Int64
+
 // statusSnapshot is the JSON payload `clipport status` reads from the local
-// status socket. Clients holds connected peers' remote addresses.
+// status socket. Clients holds connected peers' remote addresses. Pruned is
+// the cumulative count of write-dead peers closed by stale-probe pruning
+// since server start — every one freed a slot ahead of TCP keepalive.
 type statusSnapshot struct {
 	Pid          int      `json:"pid"`
 	Port         string   `json:"port"`
 	Clients      []string `json:"clients"`
 	MaxClients   int      `json:"max_clients"`    // 0 = unlimited
 	LastClipPush int64    `json:"last_clip_push"` // unix nanos; 0 = never
+	Pruned       int64    `json:"pruned"`         // cumulative; 0 = never
 }
 
 func statusSocketPath(dir string) string {
@@ -867,6 +875,7 @@ func currentStatus(port string) statusSnapshot {
 		Clients:      clients,
 		MaxClients:   max,
 		LastClipPush: lastClipPush.Load(),
+		Pruned:       prunedClients.Load(),
 	}
 }
 
@@ -926,8 +935,9 @@ func queryStatus(dir string) (statusSnapshot, error) {
 }
 
 // runStatus implements `clipport status`: report the running server's pid,
-// port, connected clients, and last clipboard push. Always prints (direct
-// subcommand output, not gated by --quiet); exits 1 when no server answers.
+// port, connected clients, stale-prune count (when non-zero), and last
+// clipboard push. Always prints (direct subcommand output, not gated by
+// --quiet); exits 1 when no server answers.
 func runStatus() {
 	dir, err := clipportDir()
 	if err != nil {
@@ -950,6 +960,9 @@ func runStatus() {
 	}
 	for _, addr := range st.Clients {
 		fmt.Printf("  %s\n", addr)
+	}
+	if st.Pruned > 0 {
+		fmt.Printf("Stale clients pruned: %d\n", st.Pruned)
 	}
 	if st.LastClipPush == 0 {
 		fmt.Println("Clipboard last pushed: never")
@@ -1378,7 +1391,13 @@ func pruneStaleClients() {
 		}
 		if !probeClient(cl) {
 			debug("pruning write-dead client", cl.addr)
-			_ = cl.conn.Close()
+			// Count only the first successful close: a second prune pass may
+			// catch the same conn before HandleClient's cleanup unlists it,
+			// but only the first close actually reclaims the slot (a repeat
+			// close errors, like net.Conn does).
+			if cl.conn.Close() == nil {
+				prunedClients.Add(1)
+			}
 		}
 	}
 }

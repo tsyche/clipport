@@ -233,6 +233,8 @@ func preserveGlobals(t *testing.T) {
 	oldPruneCooldown := prunePassCooldown
 	oldLastPrune := lastPrunePass.Load()
 	lastPrunePass.Store(0)
+	oldPrunedCount := prunedClients.Load()
+	prunedClients.Store(0)
 	oldClientProc := isClientProcess.Load()
 	oversizeFrameReported.Store(false)
 	t.Cleanup(func() {
@@ -259,6 +261,7 @@ func preserveGlobals(t *testing.T) {
 		slotReleaseTries = oldSlotTries
 		prunePassCooldown = oldPruneCooldown
 		lastPrunePass.Store(oldLastPrune)
+		prunedClients.Store(oldPrunedCount)
 		isClientProcess.Store(oldClientProc)
 	})
 }
@@ -442,6 +445,7 @@ func TestCurrentStatusSnapshot(t *testing.T) {
 	maxClients = 8
 	mu.Unlock()
 	lastClipPush.Store(1234567890)
+	prunedClients.Store(5)
 
 	st := currentStatus("53701")
 	if st.Pid != os.Getpid() {
@@ -459,6 +463,9 @@ func TestCurrentStatusSnapshot(t *testing.T) {
 	}
 	if st.LastClipPush != 1234567890 {
 		t.Errorf("lastClipPush = %d", st.LastClipPush)
+	}
+	if st.Pruned != 5 {
+		t.Errorf("pruned = %d, want 5", st.Pruned)
 	}
 }
 
@@ -510,7 +517,9 @@ type releasingProbeConn struct {
 }
 
 func (r *releasingProbeConn) Close() error {
-	r.fakeProbeConn.Close()
+	if err := r.fakeProbeConn.Close(); err != nil {
+		return err
+	}
 	releaseClientSlot()
 	return nil
 }
@@ -530,6 +539,9 @@ func TestReserveClientSlotPrunesWhenFull(t *testing.T) {
 	}
 	if !dead.closed.Load() {
 		t.Error("write-dead peer was not closed by the prune pass")
+	}
+	if got := prunedClients.Load(); got != 1 {
+		t.Errorf("prunedClients = %d, want 1 (slot reclaimed by prune-on-full)", got)
 	}
 	mu.Lock()
 	got := activeConns
@@ -634,6 +646,7 @@ func TestServeStatusRoundtrip(t *testing.T) {
 	listOfClients = []*client{{addr: "1.2.3.4:9"}}
 	mu.Unlock()
 	lastClipPush.Store(42)
+	prunedClients.Store(9)
 
 	go serveStatus(l, "7777")
 	c, err := net.Dial("unix", sock)
@@ -649,7 +662,7 @@ func TestServeStatusRoundtrip(t *testing.T) {
 	if err := json.Unmarshal(line, &st); err != nil {
 		t.Fatalf("unmarshal %q: %v", line, err)
 	}
-	if st.Port != "7777" || len(st.Clients) != 1 || st.Clients[0] != "1.2.3.4:9" || st.LastClipPush != 42 {
+	if st.Port != "7777" || len(st.Clients) != 1 || st.Clients[0] != "1.2.3.4:9" || st.LastClipPush != 42 || st.Pruned != 9 {
 		t.Errorf("snapshot = %+v", st)
 	}
 }
@@ -673,6 +686,32 @@ func TestRunStatusNoServerErrorIsNotSilent(t *testing.T) {
 	dir := t.TempDir()
 	if got := statusSocketPath(dir); got != filepath.Join(dir, "clipport.sock") {
 		t.Errorf("statusSocketPath = %q", got)
+	}
+}
+
+// `clipport status` prints the prune counter only when slots were actually
+// reclaimed — visible after a wake/joiner prune pass, quiet otherwise.
+func TestRunStatusPruneLine(t *testing.T) {
+	preserveGlobals(t)
+	dir := t.TempDir()
+	stateDir = dir
+	l, err := net.Listen("unix", statusSocketPath(dir))
+	if err != nil {
+		t.Skipf("unix sockets unavailable: %v", err)
+	}
+	defer l.Close()
+	go serveStatus(l, "7777")
+
+	prunedClients.Store(7)
+	out := captureStdout(t, runStatus)
+	if !strings.Contains(out, "Stale clients pruned: 7") {
+		t.Errorf("output missing prune line: %q", out)
+	}
+
+	prunedClients.Store(0)
+	out = captureStdout(t, runStatus)
+	if strings.Contains(out, "pruned") {
+		t.Errorf("prune line should be hidden at zero: %q", out)
 	}
 }
 
@@ -2498,7 +2537,15 @@ func (f *fakeProbeConn) Write(b []byte) (int, error) {
 	f.writes.Add(1)
 	return len(b), nil
 }
-func (f *fakeProbeConn) Close() error                { f.closed.Store(true); return nil }
+
+// Close mirrors net.Conn: the first close succeeds, repeats error — the
+// prune counter relies on this to count a dead peer only once.
+func (f *fakeProbeConn) Close() error {
+	if !f.closed.CompareAndSwap(false, true) {
+		return errors.New("use of closed connection")
+	}
+	return nil
+}
 func (f *fakeProbeConn) LocalAddr() net.Addr         { return fakeAddr("local") }
 func (f *fakeProbeConn) RemoteAddr() net.Addr        { return fakeAddr("remote") }
 func (f *fakeProbeConn) SetDeadline(time.Time) error { return nil }
@@ -2530,6 +2577,15 @@ func TestPruneStaleClientsClosesWriteDeadPeer(t *testing.T) {
 	if dead.writes.Load() != 0 {
 		t.Errorf("dead peer recorded %d successful writes, want 0", dead.writes.Load())
 	}
+	if got := prunedClients.Load(); got != 1 {
+		t.Errorf("prunedClients = %d, want 1 after closing a dead peer", got)
+	}
+	// A second pass before HandleClient cleanup unlists the conn must not
+	// double-count: the repeat close errors, like net.Conn does.
+	pruneStaleClients()
+	if got := prunedClients.Load(); got != 1 {
+		t.Errorf("prunedClients = %d after second pass, want still 1", got)
+	}
 }
 
 func TestPruneStaleClientsKeepsLivePeer(t *testing.T) {
@@ -2546,6 +2602,9 @@ func TestPruneStaleClientsKeepsLivePeer(t *testing.T) {
 	}
 	if live.writes.Load() == 0 {
 		t.Error("live peer received no probe frame")
+	}
+	if got := prunedClients.Load(); got != 0 {
+		t.Errorf("prunedClients = %d, want 0 when only live peers are probed", got)
 	}
 }
 

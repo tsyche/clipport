@@ -55,7 +55,7 @@ Examples:
     clipport -k 192.168.86.24:53701            # join using keypair-based encryption instead of a password
     clipport known-hosts                       # list trusted -k peers
     clipport known-hosts remove 192.168.86.24  # forget a peer (after key rotation; peer IDs are host-only)
-    clipport status                           # list connected clients of the running server
+    clipport status                           # list connected clients and stale-prune count
     clipport doctor                           # diagnose clipboard backend, keys, state, and listener
 Running just `clipport` will start a new clipboard.
 It will also provide an address with which you can connect to the same clipboard with another device.

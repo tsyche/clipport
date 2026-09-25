@@ -25,6 +25,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   a pixel decode, so the same pixels in different formats do not echo
   back to the sender. Missing decoders or tools degrade to "no image" —
   never a crash.
+- `clipport status` reports a stale-prune counter: the cumulative number
+  of write-dead peers closed by the stale-probe passes (wake resume,
+  full-server joiners), each of which reclaimed a slot ahead of TCP
+  keepalive. Printed only when non-zero.
 - `clipport key rotate`: regenerates this device's `-k` keypair safely —
   the old `key`/`key.pub` are renamed to timestamped `.bak` paths (or
   restored on failure), a fresh pair is generated, old and new
