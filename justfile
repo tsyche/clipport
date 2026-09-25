@@ -58,9 +58,9 @@ lintci:
         echo "$unformatted"
         exit 1
     fi
-    echo "== actionlint v1.7.12 (super-linter GITHUB_ACTIONS parity, config .github/actionlint.yml) =="
+    echo "== actionlint v1.7.12 (super-linter GITHUB_ACTIONS parity, config .github/linters/actionlint.yml) =="
     # golangci-lint above pins GOTOOLCHAIN=go1.23; actionlint needs >=1.25.
-    GOTOOLCHAIN=auto go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -config-file .github/actionlint.yml
+    GOTOOLCHAIN=auto go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -config-file .github/linters/actionlint.yml
 
 # Validate documentation claims (agent-doc sync, just-recipe references, links, docs TL;DRs)
 check-docs:

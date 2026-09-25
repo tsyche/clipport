@@ -1,10 +1,10 @@
+---
 # Config for actionlint. Super-linter resolves it as
 # ${GITHUB_WORKSPACE}/${LINTER_RULES_PATH}/actionlint.yml with LINTER_RULES_PATH
-# defaulting to .github — hence this file lives here, not at the repo root.
-# Local `just lintci` passes the same path via -config-file (bare `actionlint`
-# also auto-discovers .github/actionlint.yml).
+# defaulting to .github/linters (same dir as .jscpd.json) — hence this file's
+# location. Local `just lintci` passes the same path via -config-file.
 #
-# The pinned super-linter's actionlint ships a stale runner-label list that
+# The pinned super-linter's actionlint (v1.7.1) ships a runner-label list that
 # predates ubuntu-26.04, so the label check needs the extra entry — declare it
 # here. actionlint only offers the self-hosted labels list as an extension
 # point for runner labels; the label itself is GitHub-hosted.
