@@ -1,0 +1,21 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: "/"
+    schedule:
+      interval: monthly
+    groups:
+      go-deps:
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]
+    ignore:
+      # super-linter is pinned to the version just lintci reproduces locally;
+      # bumping it means updating the lintci tool pins in the same change.
+      - dependency-name: "super-linter/super-linter"

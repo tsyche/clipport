@@ -1,0 +1,40 @@
+name: Docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "**.md"
+      - "scripts/check-docs*.sh"
+      - "justfile"
+      - ".github/workflows/docs.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "**.md"
+      - "scripts/check-docs*.sh"
+      - "justfile"
+      - ".github/workflows/docs.yml"
+
+permissions:
+  contents: read
+
+# A newer push to the same PR supersedes the in-flight run; pushes to other
+# refs are never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check-docs:
+    name: check-docs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v7
+
+      - name: Set up just
+        uses: extractions/setup-just@v4
+
+      - name: Check documentation claims
+        run: just check-docs

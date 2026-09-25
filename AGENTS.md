@@ -19,6 +19,7 @@ just fuzz        # 60s FuzzMonitorSentClips fuzz loop (same shape as the CI fuzz
 just lint        # go vet ./...
 just lintfix     # gofmt -w .
 just lintci      # super-linter parity (golangci-lint/prettier/textlint/markdownlint, pinned)
+just check-docs  # validate doc claims (agent-doc sync, just-recipe refs, links, TL;DRs)
 just clean       # remove binary
 just fresh       # clean + build
 just install     # build and install to /usr/local/bin

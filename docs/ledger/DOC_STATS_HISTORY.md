@@ -1,6 +1,6 @@
 # Doc stats history
 
-Append-only log of doc-bloat statistics (files, words, growth ratio, density) per `audit-docs`/`consolidate-docs` run, so trends stay comparable across runs.
+**TL;DR:** Append-only log of doc-bloat statistics (files, words, growth ratio, density) per `audit-docs`/`consolidate-docs` run, so trends stay comparable across runs.
 
 | Date       | Skill            | Non-exempt files | Words | Over 600w | Doc/code 90d ratio | Density (w/kLOC) | Source glob |
 | ---------- | ---------------- | ---------------: | ----: | --------: | -----------------: | ---------------: | ----------- |

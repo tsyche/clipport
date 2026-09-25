@@ -26,8 +26,7 @@ lint:
 lintfix:
     gofmt -w .
 
-# Reproduce super-linter locally (pinned to super-linter v7.1.0 tool versions)
-# so GO/PRETTIER/textlint/markdownlint failures are caught before push.
+# Super-linter parity: golangci-lint/prettier/textlint/markdownlint, pinned (catch CI lint failures before push)
 lintci:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -52,6 +51,10 @@ lintci:
     mapfile -t files < <(find . -name '*.md' -not -path './.git/*' | sort)
     npx --yes --package=textlint@14.2.0 --package=textlint-rule-terminology \
         --package=textlint-filter-rule-comments textlint "${files[@]}"
+
+# Validate documentation claims (agent-doc sync, just-recipe references, links, docs TL;DRs)
+check-docs:
+    ./scripts/check-docs.sh
 
 # Remove built binary
 clean:
