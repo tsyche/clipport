@@ -65,8 +65,10 @@ Examples:
     clipport status                           # list connected clients of the running server
 Running just ` + "`clipport`" + ` will start a new clipboard.
 It will also provide an address with which you can connect to the same clipboard with another device.
-With --secure, the password is read from the CLIPPORT_SECRET environment variable if set,
-otherwise you'll be prompted for it. Set CLIPPORT_SECRET on both machines to skip the prompt on both ends.
+With --secure, the password is read from --password-file, the CLIPPORT_SECRET (or
+CLIPPORT_PASSWORD) environment variable, or an interactive prompt — the file and the
+environment are mutually exclusive. Set the same password on both machines to skip
+the prompt on both ends.
 With --key, each device uses its own keypair (run ` + "`clipport keygen`" + ` once per device) and no
 secret ever has to be typed or shared; the first connection to a given peer trusts its public key and
 remembers it under ~/.clipport/known_peers, warning loudly if that peer's key ever changes later.
@@ -101,6 +103,10 @@ Refer to https://github.com/tsyche/clipport for more information`
 	// stateDir overrides where keys/known_peers live (--dir flag; empty means
 	// fall back to $CLIPPORT_DIR, then ~/.clipport — see clipportDir).
 	stateDir = ""
+
+	// passwordFile is the --password-file flag: read the --secure password
+	// from a file instead of CLIPPORT_SECRET/CLIPPORT_PASSWORD or a prompt.
+	passwordFile = ""
 
 	// Clipboard access is routed through vars so tests can stub the system
 	// clipboard without depending on pbpaste/xclip being present or writable.
@@ -224,6 +230,7 @@ func main() { //nolint:gocyclo // flag parsing + dispatch; branch count is inher
 	flag.StringVar(&stateDir, "dir", "", "State directory for keys and known_peers (default ~/.clipport; also CLIPPORT_DIR)")
 	flag.BoolVar(&secure, "s", false, "Encrypt your data using a shared password")
 	flag.BoolVar(&secure, "secure", false, "Encrypt your data using a shared password")
+	flag.StringVar(&passwordFile, "password-file", "", "Read the --secure password from a file instead of the environment or a prompt")
 	flag.BoolVar(&keyMode, "k", false, "Encrypt your data using a clipport keypair (see `clipport keygen`)")
 	flag.BoolVar(&keyMode, "key", false, "Encrypt your data using a clipport keypair (see `clipport keygen`)")
 	flag.BoolVar(&printDebugInfo, "d", false, "Enable debug output")
@@ -291,6 +298,10 @@ func main() { //nolint:gocyclo // flag parsing + dispatch; branch count is inher
 	if keyMode {
 		secure = true
 	}
+	if passwordFile != "" && (!secure || keyMode) {
+		fmt.Fprintln(os.Stderr, "error: --password-file requires -s/--secure")
+		os.Exit(1)
+	}
 
 	if !secure {
 		if plaintextOptIn() {
@@ -316,20 +327,61 @@ func main() { //nolint:gocyclo // flag parsing + dispatch; branch count is inher
 	makeServer(port)
 }
 
-// resolvePassword reads the secure-mode password from CLIPPORT_SECRET if set,
-// otherwise prompts for it interactively.
+// resolvePassword returns the secure-mode password: --password-file if given,
+// else CLIPPORT_SECRET / CLIPPORT_PASSWORD, else an interactive prompt.
 func resolvePassword() []byte {
-	if v := os.Getenv("CLIPPORT_SECRET"); v != "" {
-		return []byte(v)
+	pw, found, err := passwordFromSources(passwordFile)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(1)
+	}
+	if found {
+		return pw
 	}
 	fmt.Print("Password for --secure: ")
-	pw, err := term.ReadPassword(int(syscall.Stdin)) //nolint:unconvert // syscall.Stdin's underlying type differs across the cross-compiled GOOS targets; the cast is a no-op on linux but required elsewhere
+	pw, err = term.ReadPassword(int(syscall.Stdin)) //nolint:unconvert // syscall.Stdin's underlying type differs across the cross-compiled GOOS targets; the cast is a no-op on linux but required elsewhere
 	fmt.Println()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error: could not read password:", err)
 		os.Exit(1)
 	}
 	return pw
+}
+
+// passwordFromSources resolves the non-interactive password sources for -s:
+// --password-file (trailing newlines stripped) or the CLIPPORT_SECRET /
+// CLIPPORT_PASSWORD environment variables. File and environment are mutually
+// exclusive (as are the two env names) so a misconfigured deployment fails
+// loudly instead of silently authenticating with the wrong secret. found=false
+// means no source is set and the caller should prompt.
+func passwordFromSources(file string) ([]byte, bool, error) {
+	secret := os.Getenv("CLIPPORT_SECRET")
+	alias := os.Getenv("CLIPPORT_PASSWORD")
+	if secret != "" && alias != "" {
+		return nil, false, errors.New("set only one of CLIPPORT_SECRET or CLIPPORT_PASSWORD, not both")
+	}
+	env := secret
+	if env == "" {
+		env = alias
+	}
+	if file != "" && env != "" {
+		return nil, false, errors.New("use either --password-file or CLIPPORT_SECRET/CLIPPORT_PASSWORD, not both")
+	}
+	if file != "" {
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			return nil, false, fmt.Errorf("could not read password file: %w", err)
+		}
+		pw := strings.TrimRight(string(raw), "\r\n")
+		if pw == "" {
+			return nil, false, fmt.Errorf("password file %s is empty", file)
+		}
+		return []byte(pw), true, nil
+	}
+	if env != "" {
+		return []byte(env), true, nil
+	}
+	return nil, false, nil
 }
 
 // resolveClientAddress combines a host (optionally with an embedded port) and

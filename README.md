@@ -68,9 +68,11 @@ By default, clipport asks for confirmation before sending your clipboard in plai
 containers) — a one-line warning is printed instead, and the interactive gate stays the default.
 Two ways to encrypt instead:
 
-- **Shared password** (`-s`/`--secure`): prompts for a password, or reads one from the
-  `CLIPPORT_SECRET` environment variable if set (set it on both devices to skip the prompt on
-  both ends).
+- **Shared password** (`-s`/`--secure`): prompts for a password, or reads one from
+  `--password-file <path>` (trailing newline stripped) or the `CLIPPORT_SECRET` /
+  `CLIPPORT_PASSWORD` environment variable if set — file and environment are mutually
+  exclusive, so a misconfigured deploy fails loudly. Set the same password on both
+  devices to skip the prompt on both ends.
 - **Per-device keypair** (`-k`/`--key`): run `clipport keygen` once per device, then use `-k`
   instead of `-s`. No secret ever has to be typed or shared — devices exchange public keys and
   derive a shared secret automatically. The first connection to a given peer trusts its public

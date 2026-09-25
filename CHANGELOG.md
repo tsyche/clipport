@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `--password-file <path>` for `-s`: reads the shared password from a file
+  (trailing newline stripped) so scripted deployments neither embed it in a
+  command line nor prompt for it. Joins the `CLIPPORT_SECRET` /
+  `CLIPPORT_PASSWORD` environment sources; file and environment are mutually
+  exclusive and a misconfiguration fails loudly instead of silently using the
+  wrong secret.
 - `CLIPPORT_ALLOW_PLAINTEXT=1`: headless opt-in that skips the
   `Continue? [y/N]` prompt before connecting in plaintext (exact value
   only; anything else keeps the prompt). A one-line warning prints

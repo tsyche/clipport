@@ -661,6 +661,88 @@ func TestPlaintextOptIn(t *testing.T) {
 	}
 }
 
+func TestPasswordFromFile(t *testing.T) {
+	t.Setenv("CLIPPORT_SECRET", "")
+	t.Setenv("CLIPPORT_PASSWORD", "")
+	dir := t.TempDir()
+
+	write := func(name, content string) string {
+		t.Helper()
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+		return path
+	}
+	for name, want := range map[string]string{
+		"plain":     "hunter2",
+		"newline":   "hunter2",
+		"crlf":      "hunter2",
+		"multi-nl":  "hunter2",
+		"space pad": " hunter2 ",
+	} {
+		content := want
+		switch name {
+		case "newline":
+			content = "hunter2\n"
+		case "crlf":
+			content = "hunter2\r\n"
+		case "multi-nl":
+			content = "hunter2\n\n"
+		}
+		path := write(name, content)
+		pw, found, err := passwordFromSources(path)
+		if err != nil || !found || string(pw) != want {
+			t.Errorf("passwordFromSources(%s): got (%q, %v, %v), want (%q, true, nil)", name, pw, found, err, want)
+		}
+	}
+
+	for name, content := range map[string]string{"empty": "", "only-newlines": "\n\r\n"} {
+		path := write(name, content)
+		if _, _, err := passwordFromSources(path); err == nil {
+			t.Errorf("password file %s must be rejected as empty", name)
+		}
+	}
+	if _, _, err := passwordFromSources(filepath.Join(dir, "missing")); err == nil {
+		t.Error("missing password file must error")
+	}
+}
+
+func TestPasswordEnvSources(t *testing.T) {
+	t.Setenv("CLIPPORT_SECRET", "")
+	t.Setenv("CLIPPORT_PASSWORD", "")
+
+	if _, found, err := passwordFromSources(""); err != nil || found {
+		t.Errorf("no sources: got found=%v err=%v, want found=false, nil", found, err)
+	}
+
+	t.Setenv("CLIPPORT_SECRET", "from-secret")
+	pw, found, err := passwordFromSources("")
+	if err != nil || !found || string(pw) != "from-secret" {
+		t.Errorf("CLIPPORT_SECRET: got (%q, %v, %v)", pw, found, err)
+	}
+	t.Setenv("CLIPPORT_SECRET", "")
+	t.Setenv("CLIPPORT_PASSWORD", "from-alias")
+	pw, found, err = passwordFromSources("")
+	if err != nil || !found || string(pw) != "from-alias" {
+		t.Errorf("CLIPPORT_PASSWORD: got (%q, %v, %v)", pw, found, err)
+	}
+
+	t.Setenv("CLIPPORT_SECRET", "a")
+	t.Setenv("CLIPPORT_PASSWORD", "b")
+	if _, _, err := passwordFromSources(""); err == nil {
+		t.Error("both env names set must error, not pick one silently")
+	}
+
+	path := filepath.Join(t.TempDir(), "pw")
+	if err := os.WriteFile(path, []byte("from-file"), 0600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, _, err := passwordFromSources(path); err == nil {
+		t.Error("file and environment together must error, not silently prefer one")
+	}
+}
+
 func TestClipportDirDefaultHome(t *testing.T) {
 	preserveGlobals(t)
 	home := setTestHome(t)
