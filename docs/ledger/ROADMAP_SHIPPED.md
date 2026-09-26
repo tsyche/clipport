@@ -43,8 +43,50 @@
 - [x] 2026-09-25 — Stale-prune count in `clipport status`
 - [x] 2026-09-25 — Status payload kind + size in `clipport status`
 - [x] 2026-09-25 — Last-seen time in `known-hosts list`
+- [x] 2026-09-25 — Server IP re-announce + LAN address discovery (UDP 33334)
 
 ## Archived entries
+
+### 2026-09-25 — Server IP re-announce + LAN address discovery
+
+1. **Server re-announces or survives an IP change after reassociation** — ~half day, needs design
+   - The connect string (`clipport <ip>:<port>`) is printed once at startup. If the server's Wi-Fi reassociates after sleep and gets a new DHCP lease, that printed IP goes stale and clients get "could not connect" with no indication why.
+   - Options: periodically re-announce the current IP, or move to mDNS/Bonjour-style discovery instead of a static printed address.
+
+Shipped — both halves, no mDNS dependency (a fixed UDP probe keeps the zero-config story and adds no
+library to a single-file binary):
+
+- **Server re-announces.** `watchServerAddress` polls `outboundIPTo("8.8.8.8:80")` every
+  `serverIPWatchInterval` (5s) from `makeServer` and, when the address differs from the last one
+  seen, prints `Server network address changed: Run \`clipport <ip:port>\` to join this clipboard`.
+  Silent while the lookup fails (no route during the drop), so a transient outage does not spam.
+- **Clients survive it.** `ConnectToServer` runs `rediscoverServer` after every failed dial: it
+  takes the port from the configured address and calls `discoveryProbe` (var seam, default
+  `discoverServerAddress`) which broadcasts `clipport-discover` to every non-loopback interface's
+  directed broadcast on UDP `33334`, then accepts only a `clipport-server <ip:port>` reply naming
+  the same port (`parseDiscoveryReply` — a different clipport server must not hijack a client pinned
+  elsewhere). A match prints `Found the clipboard server at <addr>` and redials it immediately,
+  skipping the backoff; a miss logs a single hint per outage and retrying continues as before.
+  The port is re-extracted on each attempt, so a discovered address stays discoverable.
+- Server-side binds once in `makeServer` via `serveDiscovery` (stopped by a `discoveryStop` channel
+  on return); a bind failure (UDP 33334 taken on the host) only disables discovery — the server
+  still re-prints its address. `directedBroadcast` skips degenerate masks (/0, /32, non-canonical)
+  and IPv6 (no directed broadcast — discovery is IPv4-only by design).
+
+Design note: discovery only ever supplies an address to dial; it carries no clipboard bytes and no
+peer identity, so `-k`/`-s`/plaintext rules are unchanged for the session that follows. Documented
+as its own `README` bullet under Security model (unauthenticated reply reveals the server's address
+to LAN probes; a won race can only stall a reconnect, not forge a trusted peer).
+
+Tests (9 new): `TestDirectedBroadcast` mask table, `TestDiscoveryTargetsAvoidLoopback`,
+`TestParseDiscoveryReply` (port mismatch / malformed), `TestDiscoverServerAddressOnFindsReply` +
+`FindsNothing`, `TestServeDiscoveryRepliesToProbe` + `IgnoresUnknownPayloads`,
+`TestWatchServerAddressAnnouncesChange` (announces once per change), and
+`TestConnectToServerRediscoversChangedAddress` (injected `discoveryProbe`, full dial → moved
+address → session completes without user intervention). `preserveGlobals` restores `discoveryProbe`.
+Docs: `README` (Usage subsection + Security model bullet), `AGENTS.md`/`CLAUDE.md` architecture
+note, CHANGELOG. Lint: gosec `G115` on the `int(fd)` `SO_BROADCAST` cast suppressed with a
+`#nosec` comment (fd is kernel-supplied).
 
 ### 2026-09-25 — Last-seen time in `known-hosts list`
 

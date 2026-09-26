@@ -1322,6 +1322,15 @@ func makeServer(port string) {
 		port = strconv.Itoa(l.Addr().(*net.TCPAddr).Port)
 	}
 	startStatusServer(port)
+	discoveryStop := make(chan struct{})
+	defer close(discoveryStop)
+	go serveDiscovery(port, discoveryStop)
+	go watchServerAddress(port, serverIPWatchInterval,
+		func() (net.IP, error) { return outboundIPTo("8.8.8.8:80") },
+		func(addr string) {
+			infof("Server network address changed: Run `clipport %s` to join this clipboard\n", addr)
+		},
+		discoveryStop)
 	h := &serverHandle{l: l, wakeStop: make(chan struct{}), wakeDone: make(chan struct{})}
 	mu.Lock()
 	runningServer = h
@@ -1542,7 +1551,10 @@ func clientListed(target *client) bool {
 }
 
 // Connect to the server (which starts a new clipboard), reconnecting
-// automatically if the connection drops while the server is still up.
+// automatically if the connection drops while the server is still up. When a
+// dial fails, LAN discovery runs first so an address change (DHCP lease
+// renewal after reassociation) recovers without the user copying a new
+// connect string.
 func ConnectToServer(address string) {
 	const (
 		baseBackoff = 3 * time.Second
@@ -1550,6 +1562,7 @@ func ConnectToServer(address string) {
 	)
 	isClientProcess.Store(true)
 	backoff := baseBackoff
+	hintedDiscovery := false
 	for {
 		retry, reached := connectOnce(address)
 		if !retry {
@@ -1559,6 +1572,7 @@ func ConnectToServer(address string) {
 			// A successful session means the last failure mode is over —
 			// start the next outage at the short delay again.
 			backoff = baseBackoff
+			hintedDiscovery = false
 		}
 		if systemWoke.Swap(false) {
 			// Resume from sleep: the old connection was torn down by wake
@@ -1566,9 +1580,35 @@ func ConnectToServer(address string) {
 			info("System resume detected; reconnecting immediately")
 			continue
 		}
+		if !reached {
+			if alt, found := rediscoverServer(address); found {
+				infof("Found the clipboard server at %s\n", alt)
+				address = alt
+				continue
+			}
+			if !hintedDiscovery {
+				hintedDiscovery = true
+				info("No clipboard server answered discovery on this network; it may be down or on another network")
+			}
+		}
 		time.Sleep(backoff)
 		backoff = nextBackoff(backoff, maxBackoff)
 	}
+}
+
+// rediscoverServer asks the LAN whether the server behind `address` moved to
+// a new ip (its port must match). Returns the announced address, ok=false if
+// discovery found nothing usable.
+func rediscoverServer(address string) (string, bool) {
+	_, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return "", false
+	}
+	alt, ok := discoveryProbe(port)
+	if !ok || alt == address {
+		return "", false
+	}
+	return alt, true
 }
 
 // nextBackoff doubles cur, capped at max.
@@ -1587,13 +1627,11 @@ func nextBackoff(cur, max time.Duration) time.Duration {
 // (used to reset reconnect backoff).
 func connectOnce(address string) (retry, reached bool) {
 	c, err := net.Dial("tcp", address) // dual-stack: resolver tries IPv6 and IPv4 addresses
-	if c == nil {
-		handleError(err)
-		info("Could not connect to", address)
-		return true, false
-	}
 	if err != nil {
-		handleError(err)
+		if c != nil {
+			_ = c.Close()
+		}
+		infof("Could not connect to %s: %v\n", address, err)
 		return true, false
 	}
 	enableKeepAlive(c)
@@ -2639,14 +2677,263 @@ func runSetClipCommand(s string) {
 
 func getOutboundIP() net.IP {
 	// https://stackoverflow.com/questions/23558425/how-do-i-get-the-local-ip-address-in-go/37382208#37382208
-	conn, err := net.Dial("udp", "8.8.8.8:80") // address can be anything. Doesn't even have to exist
+	ip, err := outboundIPTo("8.8.8.8:80")
 	if err != nil {
 		handleError(err)
 		return nil
 	}
+	return ip
+}
+
+// outboundIPTo returns the local address the OS routing table would use to
+// reach dst (any UDP address; nothing is actually sent), or an error if no
+// route exists. Unlike getOutboundIP it never prints — callers decide.
+func outboundIPTo(dst string) (net.IP, error) {
+	conn, err := net.Dial("udp", dst) // address can be anything. Doesn't even have to exist
+	if err != nil {
+		return nil, err
+	}
 	defer conn.Close()
 	localAddr := conn.LocalAddr().(*net.UDPAddr)
-	return localAddr.IP
+	return localAddr.IP, nil
+}
+
+const (
+	// discoveryUDPPort is the UDP port clipport servers open for address
+	// probes: after a DHCP lease change the printed connect string is stale,
+	// so clients broadcast a probe here and expect the current ip:port back.
+	discoveryUDPPort = 33334
+	// discoveryProbeMsg is the exact payload of a client probe; anything
+	// else arriving on the port is ignored.
+	discoveryProbeMsg = "clipport-discover"
+	// discoveryReplyMsg prefixes a server's answer: "<prefix><ip:port>".
+	discoveryReplyMsg = "clipport-server "
+	// discoveryReplyWait bounds one client discovery round trip (servers
+	// answer immediately, so this is only slack for broadcast delivery).
+	discoveryReplyWait = 750 * time.Millisecond
+	// serverIPWatchInterval is how often the server re-checks its own
+	// outbound address and re-prints the connect command when it changes.
+	serverIPWatchInterval = 5 * time.Second
+)
+
+// discoveryProbe is ConnectToServer's address-discovery hook: given the port
+// the client was configured with, return the server's current address if one
+// on this network answers with that port. Var so tests can inject a
+// deterministic prober.
+var discoveryProbe = discoverServerAddress
+
+// discoverServerAddress probes every interface's directed broadcast address
+// for a clipport server listening on wantPort and returns its announced
+// address. ok=false when nothing answered within discoveryReplyWait — the
+// caller keeps retrying the original address as before.
+func discoverServerAddress(wantPort string) (string, bool) {
+	return discoverServerAddressOn(discoveryTargets(), wantPort, discoveryReplyWait)
+}
+
+// discoverServerAddressOn is the testable core of discoverServerAddress:
+// send one probe datagram to each target (host:udpPort) and wait up to wait
+// for a reply whose port matches wantPort.
+func discoverServerAddressOn(targets []string, wantPort string, wait time.Duration) (string, bool) {
+	if len(targets) == 0 {
+		return "", false
+	}
+	pc, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
+	if err != nil {
+		debug("discovery disabled:", err)
+		return "", false
+	}
+	defer pc.Close()
+	// Directed broadcast is only sendable with SO_BROADCAST set; a failure
+	// here just means some kernels refuse the probes and discovery times out.
+	if raw, err := pc.SyscallConn(); err == nil {
+		if err := raw.Control(func(fd uintptr) {
+			// #nosec G115 -- fd is handed to us by the kernel and always fits an int
+			if err := syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_BROADCAST, 1); err != nil {
+				debug("discovery SO_BROADCAST:", err)
+			}
+		}); err != nil {
+			debug("discovery socket setup:", err)
+		}
+	}
+	for _, target := range targets {
+		dst, err := net.ResolveUDPAddr("udp4", target)
+		if err != nil {
+			continue
+		}
+		if _, err := pc.WriteToUDP([]byte(discoveryProbeMsg), dst); err != nil {
+			debug("discovery probe failed:", err)
+		}
+	}
+	deadline := time.Now().Add(wait)
+	buf := make([]byte, 256)
+	for {
+		if err := pc.SetReadDeadline(deadline); err != nil {
+			return "", false
+		}
+		n, _, err := pc.ReadFromUDP(buf)
+		if err != nil {
+			return "", false
+		}
+		if addr, ok := parseDiscoveryReply(string(buf[:n]), wantPort); ok {
+			return addr, true
+		}
+	}
+}
+
+// parseDiscoveryReply validates a server answer and returns the announced
+// address. Only replies that announce wantPort count: a different clipport
+// server on the LAN must not hijack a client pinned to another port.
+func parseDiscoveryReply(msg, wantPort string) (string, bool) {
+	if !strings.HasPrefix(msg, discoveryReplyMsg) {
+		return "", false
+	}
+	addr := strings.TrimSpace(strings.TrimPrefix(msg, discoveryReplyMsg))
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil || host == "" || port != wantPort {
+		return "", false
+	}
+	return addr, true
+}
+
+// discoveryTargets returns "<broadcast>:<discoveryUDPPort>" for every
+// non-loopback interface's IPv4 broadcast address (directed broadcast has no
+// IPv6 equivalent — discovery is IPv4-only for now).
+func discoveryTargets() []string {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		debug("discovery targets unavailable:", err)
+		return nil
+	}
+	var targets []string
+	for _, ifi := range ifaces {
+		if ifi.Flags&net.FlagUp == 0 || ifi.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, err := ifi.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, a := range addrs {
+			ipn, ok := a.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			bcast := directedBroadcast(ipn)
+			if bcast == nil {
+				continue
+			}
+			targets = append(targets, net.JoinHostPort(bcast.String(), strconv.Itoa(discoveryUDPPort)))
+		}
+	}
+	return targets
+}
+
+// directedBroadcast returns ipn's IPv4 broadcast address, or nil when the
+// network is degenerate (/32 host routes, /0, non-canonical masks) or the
+// address is not IPv4.
+func directedBroadcast(ipn *net.IPNet) net.IP {
+	ip := ipn.IP.To4()
+	if ip == nil {
+		return nil
+	}
+	mask := ipn.Mask
+	if len(mask) == net.IPv6len {
+		mask = mask[net.IPv6len-net.IPv4len:] // v4-in-v6 mask: the real v4 mask is the last half
+	}
+	if len(mask) != net.IPv4len {
+		return nil
+	}
+	ones, bits := mask.Size()
+	if bits != 32 || ones == 0 || ones == 32 { // non-canonical, /0, or host route
+		return nil
+	}
+	bcast := make(net.IP, net.IPv4len)
+	for i := range ip {
+		bcast[i] = ip[i] | ^mask[i]
+	}
+	return bcast
+}
+
+// serveDiscovery binds the discovery UDP port and answers probes until stop.
+// A bind failure (port in use by another clipport server on this host) only
+// disables discovery: the server still works and still re-prints its address.
+func serveDiscovery(port string, stop <-chan struct{}) {
+	pc, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: discoveryUDPPort})
+	if err != nil {
+		debug("address discovery disabled:", err)
+		return
+	}
+	serveDiscoveryOn(pc, port, stop)
+}
+
+// serveDiscoveryOn reads probe datagrams from pc and replies to each with the
+// current address (ip as seen from the probing peer, port = the server's
+// clipboard port). Returns when stop closes or the socket fails.
+func serveDiscoveryOn(pc *net.UDPConn, port string, stop <-chan struct{}) {
+	defer pc.Close()
+	buf := make([]byte, 256)
+	for {
+		if err := pc.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+			return
+		}
+		n, from, err := pc.ReadFromUDP(buf)
+		if err != nil {
+			var netErr net.Error
+			if errors.As(err, &netErr) && netErr.Timeout() {
+				select {
+				case <-stop:
+					return
+				default:
+					continue
+				}
+			}
+			debug("discovery listener stopped:", err)
+			return
+		}
+		if string(buf[:n]) == discoveryProbeMsg {
+			replyDiscoveryProbe(pc, from, port)
+		}
+	}
+}
+
+// replyDiscoveryProbe answers one probe with "clipport-server <ip:port>",
+// picking the local IP on the same interface the probe arrived from.
+func replyDiscoveryProbe(pc *net.UDPConn, from *net.UDPAddr, port string) {
+	dst := net.JoinHostPort(from.IP.String(), strconv.Itoa(from.Port))
+	ip, err := outboundIPTo(dst)
+	if err != nil || ip == nil {
+		return
+	}
+	reply := discoveryReplyMsg + net.JoinHostPort(ip.String(), port)
+	if _, err := pc.WriteToUDP([]byte(reply), from); err != nil {
+		debug("discovery reply failed:", err)
+	}
+}
+
+// watchServerAddress polls lookup every `every` and hands announce the new
+// connect address whenever it differs from the previous one (Wi-Fi
+// reassociation with a fresh DHCP lease leaves the startup line stale).
+// Silent while lookup fails; returns when stop closes.
+func watchServerAddress(port string, every time.Duration, lookup func() (net.IP, error), announce func(string), stop <-chan struct{}) {
+	last, err := lookup()
+	if err != nil {
+		last = nil
+	}
+	ticker := time.NewTicker(every)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			ip, err := lookup()
+			if err != nil || ip == nil || ip.Equal(last) {
+				continue
+			}
+			last = ip
+			announce(net.JoinHostPort(ip.String(), port))
+		}
+	}
 }
 
 func handleError(err error) {

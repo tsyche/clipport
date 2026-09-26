@@ -15,12 +15,6 @@ Inferred from the codebase on 2026-06-16 (no prior ROADMAP.md existed); audited 
    - The shipped `--quiet`/`--password-file`/`CLIPPORT_ALLOW_PLAINTEXT` trio targets launchd/systemd, but `README` has
      no unit files to copy; add working launchd plist + systemd service examples using them. _(Promoted to Top 3.)_
 
-## New Suggestions (2026-07-02)
-
-1. **Server re-announces or survives an IP change after reassociation** — ~half day, needs design
-   - The connect string (`clipport <ip>:<port>`) is printed once at startup. If the server's Wi-Fi reassociates after sleep and gets a new DHCP lease, that printed IP goes stale and clients get "could not connect" with no indication why.
-   - Options: periodically re-announce the current IP, or move to mDNS/Bonjour-style discovery instead of a static printed address (may overlap with Remote Connectivity below).
-
 ## New Suggestions (2026-09-24)
 
 1. **File-path clipboard sync** — ~half day
@@ -135,3 +129,8 @@ Security constraint: remote mode must require `-k`; clear error message if attem
 - 2026-09-25: shipped status payload kind (Top 3 #2, `recordClipPush` kind+size in the pushed line, commit `dc13323`)
   and known-hosts last-seen (Top 3 #3, optional third column in `known_peers`, commit `820ad7b`) — both moved to
   ledger. Promoted `--json` output and headless service docs from suggestions; CI goreleaser check stays Top 3 #1.
+- 2026-09-25: shipped the 2026-07-02 IP-change suggestion (last item outside Top 3): server re-prints the join
+  command when its outbound IP changes (`watchServerAddress`, 5s poll) and clients redial a discovered address
+  after a failed dial (UDP probe on 33334, `rediscoverServer`) — moved to ledger. mDNS was the other listed
+  option; declined in favour of a fixed UDP probe (no dependency in a single-file binary, same zero-config UX).
+  Top 3 unchanged (CI goreleaser check, `--json` output, headless service docs — all still open).

@@ -238,6 +238,7 @@ func preserveGlobals(t *testing.T) {
 	oldPrunedCount := prunedClients.Load()
 	prunedClients.Store(0)
 	oldClientProc := isClientProcess.Load()
+	oldDiscoveryProbe := discoveryProbe
 	oversizeFrameReported.Store(false)
 	t.Cleanup(func() {
 		secure, keyMode = oldSecure, oldKeyMode
@@ -267,6 +268,7 @@ func preserveGlobals(t *testing.T) {
 		lastPrunePass.Store(oldLastPrune)
 		prunedClients.Store(oldPrunedCount)
 		isClientProcess.Store(oldClientProc)
+		discoveryProbe = oldDiscoveryProbe
 	})
 }
 
@@ -3379,6 +3381,294 @@ func waitForCondition(t *testing.T, timeout time.Duration, what string, cond fun
 			t.Fatalf("timed out waiting for %s", what)
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// LAN address discovery: after a DHCP lease change the printed connect
+// string goes stale, so clients probe broadcast addresses and servers reply
+// with their current ip:port.
+
+func TestDirectedBroadcast(t *testing.T) {
+	cases := []struct {
+		name string
+		ipn  *net.IPNet
+		want string // "" means nil
+	}{
+		{"slash24", &net.IPNet{IP: net.ParseIP("192.168.1.50"), Mask: net.CIDRMask(24, 32)}, "192.168.1.255"},
+		{"slash12", &net.IPNet{IP: net.ParseIP("172.16.5.9"), Mask: net.CIDRMask(12, 32)}, "172.31.255.255"},
+		{"host route", &net.IPNet{IP: net.ParseIP("10.0.0.5"), Mask: net.CIDRMask(32, 32)}, ""},
+		{"zero mask", &net.IPNet{IP: net.ParseIP("10.0.0.5"), Mask: net.CIDRMask(0, 32)}, ""},
+		{"non-canonical", &net.IPNet{IP: net.ParseIP("10.1.2.3"), Mask: net.IPMask{255, 0, 255, 0}}, ""},
+		{"v4 in v6", &net.IPNet{IP: net.ParseIP("192.168.1.50"), Mask: net.CIDRMask(120, 128)}, "192.168.1.255"},
+		{"pure ipv6", &net.IPNet{IP: net.ParseIP("fd00::1"), Mask: net.CIDRMask(64, 128)}, ""},
+	}
+	for _, c := range cases {
+		got := directedBroadcast(c.ipn)
+		if c.want == "" {
+			if got != nil {
+				t.Errorf("%s: got %v, want nil", c.name, got)
+			}
+			continue
+		}
+		if got == nil || got.String() != c.want {
+			t.Errorf("%s: got %v, want %s", c.name, got, c.want)
+		}
+	}
+}
+
+func TestDiscoveryTargetsAvoidLoopback(t *testing.T) {
+	wantPort := strconv.Itoa(discoveryUDPPort)
+	for _, target := range discoveryTargets() {
+		host, port, err := net.SplitHostPort(target)
+		if err != nil || port != wantPort {
+			t.Errorf("target %q does not parse as :%s (%v)", target, wantPort, err)
+			continue
+		}
+		ip := net.ParseIP(host)
+		if ip == nil || ip.IsLoopback() || ip.IsUnspecified() {
+			t.Errorf("target host %q must be a real unicast address", host)
+		}
+	}
+}
+
+func TestParseDiscoveryReply(t *testing.T) {
+	cases := []struct {
+		msg, port, want string
+		ok              bool
+	}{
+		{discoveryReplyMsg + "192.168.1.5:4444", "4444", "192.168.1.5:4444", true},
+		{discoveryReplyMsg + "192.168.1.5:4444\n", "4444", "192.168.1.5:4444", true},
+		{discoveryReplyMsg + "192.168.1.5:4444", "5555", "", false},
+		{discoveryReplyMsg + "192.168.1.5", "4444", "", false},
+		{discoveryReplyMsg + "192.168.1.5:", "4444", "", false},
+		{discoveryReplyMsg + ":4444", "4444", "", false},
+		{discoveryProbeMsg, "4444", "", false},
+		{"garbage", "4444", "", false},
+	}
+	for _, c := range cases {
+		got, ok := parseDiscoveryReply(c.msg, c.port)
+		if ok != c.ok || got != c.want {
+			t.Errorf("parseDiscoveryReply(%q, %q) = (%q, %v), want (%q, %v)", c.msg, c.port, got, ok, c.want, c.ok)
+		}
+	}
+}
+
+func TestDiscoverServerAddressOnFindsReply(t *testing.T) {
+	srv, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+	sawProbe := make(chan bool, 1)
+	go func() {
+		buf := make([]byte, 256)
+		if err := srv.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+			sawProbe <- false
+			return
+		}
+		n, from, err := srv.ReadFromUDP(buf)
+		if err != nil {
+			sawProbe <- false
+			return
+		}
+		match := string(buf[:n]) == discoveryProbeMsg
+		sawProbe <- match
+		if !match {
+			return
+		}
+		if _, err := srv.WriteToUDP([]byte(discoveryReplyMsg+"127.0.0.1:4444"), from); err != nil {
+			t.Error(err)
+		}
+	}()
+	addr, ok := discoverServerAddressOn([]string{srv.LocalAddr().String()}, "4444", 2*time.Second)
+	if !ok || addr != "127.0.0.1:4444" {
+		t.Errorf("discover = (%q, %v), want (127.0.0.1:4444, true)", addr, ok)
+	}
+	if !<-sawProbe {
+		t.Error("responder did not receive a well-formed probe")
+	}
+}
+
+func TestDiscoverServerAddressOnFindsNothing(t *testing.T) {
+	if addr, ok := discoverServerAddressOn(nil, "4444", 10*time.Millisecond); ok || addr != "" {
+		t.Errorf("no targets: got (%q, %v), want no answer", addr, ok)
+	}
+	// A responder announcing a different port is a different clipport
+	// server — never adopt it.
+	srv, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+	go func() {
+		buf := make([]byte, 256)
+		if err := srv.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+			return
+		}
+		_, from, err := srv.ReadFromUDP(buf)
+		if err != nil {
+			return
+		}
+		if _, err := srv.WriteToUDP([]byte(discoveryReplyMsg+"127.0.0.1:9999"), from); err != nil {
+			t.Error(err)
+		}
+	}()
+	if addr, ok := discoverServerAddressOn([]string{srv.LocalAddr().String()}, "4444", 300*time.Millisecond); ok {
+		t.Errorf("foreign server adopted: %q", addr)
+	}
+}
+
+func TestServeDiscoveryRepliesToProbe(t *testing.T) {
+	pc, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop := make(chan struct{})
+	defer close(stop)
+	go serveDiscoveryOn(pc, "5555", stop)
+
+	client, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	target := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: pc.LocalAddr().(*net.UDPAddr).Port}
+	if _, err := client.WriteToUDP([]byte(discoveryProbeMsg), target); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 256)
+	n, _, err := client.ReadFromUDP(buf)
+	if err != nil {
+		t.Fatalf("no discovery reply: %v", err)
+	}
+	addr, ok := parseDiscoveryReply(string(buf[:n]), "5555")
+	if !ok || addr != "127.0.0.1:5555" {
+		t.Errorf("reply %q parsed as (%q, %v), want 127.0.0.1:5555", buf[:n], addr, ok)
+	}
+}
+
+func TestServeDiscoveryIgnoresUnknownPayloads(t *testing.T) {
+	pc, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop := make(chan struct{})
+	defer close(stop)
+	go serveDiscoveryOn(pc, "5555", stop)
+
+	client, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	target := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: pc.LocalAddr().(*net.UDPAddr).Port}
+	if _, err := client.WriteToUDP([]byte("clipport-something-else"), target); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.SetReadDeadline(time.Now().Add(400 * time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 256)
+	if _, _, err := client.ReadFromUDP(buf); err == nil {
+		t.Error("unexpected reply to an unknown payload")
+	}
+}
+
+func TestWatchServerAddressAnnouncesChange(t *testing.T) {
+	ips := []string{"192.168.1.10", "192.168.1.10", "192.168.1.44", "192.168.1.44"}
+	var idx atomic.Int32
+	lookup := func() (net.IP, error) {
+		n := int(idx.Add(1))
+		if n > len(ips) {
+			n = len(ips)
+		}
+		return net.ParseIP(ips[n-1]), nil
+	}
+	announced := make(chan string, 4)
+	stop := make(chan struct{})
+	defer close(stop)
+	go watchServerAddress("4444", 5*time.Millisecond, lookup, func(addr string) {
+		announced <- addr
+	}, stop)
+	select {
+	case got := <-announced:
+		want := net.JoinHostPort("192.168.1.44", "4444")
+		if got != want {
+			t.Errorf("announced %q, want %q", got, want)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no address-change announcement")
+	}
+	select {
+	case got := <-announced:
+		t.Errorf("second announcement %q — a change must announce once", got)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+// A client whose configured address went stale (the server's DHCP lease
+// changed after reassociation) must find the server via LAN discovery, redial
+// the announced address, and complete the session without user intervention.
+// The probe itself is injected — the UDP path has its own tests above — so
+// this locks down the reconnect-loop orchestration with a real refused dial.
+func TestConnectToServerRediscoversChangedAddress(t *testing.T) {
+	preserveGlobals(t)
+	setTestHome(t)
+	secure, keyMode = false, false
+	quiet, printDebugInfo = false, false
+	getLocalClip = func() string { return "" }
+	setLocalClip = func(string) {}
+
+	ln, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	realAddr := ln.Addr().String()
+	accepted := make(chan struct{})
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		_ = c.Close()
+		close(accepted)
+	}()
+
+	// Bind-then-close: a port that refuses instantly, like an address the
+	// server no longer answers on.
+	stale, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleAddr := stale.Addr().String()
+	if err := stale.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	discoveryProbe = func(string) (string, bool) { return realAddr, true }
+
+	out := captureStdout(t, func() { ConnectToServer(staleAddr) })
+
+	if !strings.Contains(out, "Could not connect to "+staleAddr) {
+		t.Errorf("missing dial-failure line: %q", out)
+	}
+	if !strings.Contains(out, "Found the clipboard server at "+realAddr) {
+		t.Errorf("missing discovery line: %q", out)
+	}
+	if !strings.Contains(out, "Connected to the clipboard at "+realAddr) {
+		t.Errorf("client never reached the discovered address: %q", out)
+	}
+	if strings.Contains(out, "No clipboard server answered discovery") {
+		t.Errorf("discovery hint printed despite a successful rediscovery: %q", out)
+	}
+	select {
+	case <-accepted:
+	case <-time.After(time.Second):
+		t.Error("server never saw the rediscovered connection")
 	}
 }
 

@@ -29,7 +29,7 @@ just sync-docs   # copy newer of CLAUDE.md/AGENTS.md over the other
 ## Key files
 
 - `clipport.go` — all application logic (single file)
-- `clipport_test.go` — unit tests (crypto, wire protocol, TOFU/handshake, monitors) + fuzz seed + end-to-end loopback test
+- `clipport_test.go` — unit tests (crypto, wire protocol, TOFU/handshake, monitors, LAN address discovery) + fuzz seed + end-to-end loopback test
 - `.goreleaser.yml` — release config (cross-compile + brew tap)
 - `flake.nix` — Nix build
 - `CONTRIBUTING.md` — setup, workflow, and branching conventions for contributors
@@ -48,6 +48,10 @@ sleep, or when a joiner arrives at a full `--max-clients`, one stale-probe pass
 waiting out TCP keepalive. Encryption is opt-in: `--secure`/`-s` for a shared password, or `--key`/`-k` for a
 per-device keypair with trust-on-first-connect peer verification. Without either, clipport
 prompts for confirmation before sending the clipboard in plaintext. On Ctrl+C, the server propagates shutdown to connected clients via TCP FIN so they exit cleanly instead of trying to reconnect.
+Address changes survive Wi-Fi reassociation: the server re-prints the join command when its outbound IP
+changes (`watchServerAddress`), and a client whose dial fails broadcasts a UDP probe on port `33334`
+(`serveDiscovery`/`discoverServerAddress`, IPv4-only) and adopts the address that answers for the same
+port — discovery only supplies an address to dial, never clipboard data or peer identity.
 
 ## Fork notes
 

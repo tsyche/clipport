@@ -65,6 +65,23 @@ State (keys, `known_peers`) lives in `~/.clipport` by default; set `CLIPPORT_DIR
 
 > **Note:** The devices have to be on the same local network (eg. connected to the same Wi-Fi) unless the device has a public IP with all ports routed to it. (use the public IP instead of what Clipport prints in this case)
 
+### Address changes (Wi-Fi reassociation, DHCP renewal)
+
+The printed `clipport <ip>:<port>` line is only as fresh as the moment it was printed. If the server
+machine drops off Wi-Fi and comes back with a new address, clipport recovers on its own:
+
+- The server re-checks its own address every few seconds and prints the updated join command when it
+  changes (``Server network address changed: Run `clipport <ip>:<port>` to join this clipboard``).
+- When a client's dial fails, it broadcasts a UDP probe on port `33334` and adopts whatever address
+  answers for the same port, printing `Found the clipboard server at <ip:port>` instead of leaving
+  you to copy a fresh string by hand. If nothing answers, it says so once and keeps retrying the
+  address you gave it.
+
+Discovery is IPv4-only (IPv6 has no directed broadcast) and carries no clipboard data — just the
+server's current address, and only in reply to a matching probe. If it is blocked or the port is
+already taken on the server host, clipport still works; you only lose the automatic recovery and
+have to re-run the printed command yourself.
+
 ## Encryption
 
 By default, clipport asks for confirmation before sending your clipboard in plaintext. Set
@@ -130,6 +147,15 @@ access control of its own — what each mode protects against:
   model includes an active attacker from the very first connect. Each device
   can print its own fingerprint with `clipport key fingerprint` (the same
   value `clipport keygen` showed when the key was created).
+
+- **Address discovery (always on)** — the server also answers a fixed,
+  unauthenticated UDP probe on port `33334` so clients can find it after an IP
+  change. That reply reveals the server's current address and port to anyone on
+  the LAN who sends the probe, and an attacker who wins the race could announce
+  a wrong address and stall a client's reconnect — but discovery only ever
+  substitutes an address to dial; the subsequent TCP session is still subject to
+  whatever `-k`/`-s`/plaintext rules apply, so it cannot forge a trusted peer or
+  inject clipboard data. It carries no clipboard contents.
 
 No mode protects against a compromised device: anything with your user
 account can read the OS clipboard directly. Don't expose the listen port to

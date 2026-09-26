@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Address-change recovery after Wi-Fi reassociation: the server re-checkes its
+  outbound IP every 5s and re-prints the join command when it changes, and a
+  client whose dial fails broadcasts a UDP probe on port `33334` and adopts the
+  address that answers for the same clipboard port (printed as
+  `Found the clipboard server at <ip:port>`) instead of leaving a stale
+  connect string to be copied by hand. Discovery is IPv4-only, carries no
+  clipboard data or peer identity — it only supplies an address to dial, so
+  `-k`/`-s`/plaintext rules apply unchanged to the session itself. A bind or
+  probe failure degrades to the old behaviour rather than breaking the server.
 - `clipport doctor`: read-only diagnostics that turn first-run failures into
   named checks — clipboard backend on PATH (Wayland/X11/macOS/Windows), state
   dir, keypair presence + fingerprint, trusted `known-hosts` count, whether a
